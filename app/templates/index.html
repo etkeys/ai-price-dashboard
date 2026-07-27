@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+
+{% block title %}Models | AI Price Dashboard{% endblock %}
+
+{% block content %}
+<section class="models-listing">
+    <h2>Models</h2>
+    <p class="unit-note">Prices in USD per 1M tokens.</p>
+    <div class="table-scroll">
+        <table class="models-table">
+            <thead>
+                <tr>
+                    <th scope="col">Model Name</th>
+                    <th scope="col" class="num">Price In</th>
+                    <th scope="col" class="num">Price Out</th>
+                    <th scope="col" class="num">Context Size</th>
+                    <th scope="col">Input Content</th>
+                    <th scope="col">Output Content</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for model in models %}
+                <tr>
+                    <td class="model-name">{{ model.name }}</td>
+                    <td class="num">${{ format_price(model.price_in) }}</td>
+                    <td class="num">${{ format_price(model.price_out) }}</td>
+                    <td class="num">{{ format_context(model.context_tokens) }}</td>
+                    <td>{{ model.input_content | join(', ') }}</td>
+                    <td>{{ model.output_content | join(', ') }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="empty-state">No models available.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

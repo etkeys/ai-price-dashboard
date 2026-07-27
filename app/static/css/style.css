@@ -1,0 +1,111 @@
+/* Base styles for AI Price Dashboard */
+
+:root {
+    --bg-color: #f8f9fa;
+    --text-color: #212529;
+    --accent-color: #0d6efd;
+    --header-bg: #343a40;
+    --header-text: #ffffff;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    line-height: 1.5;
+}
+
+header {
+    background-color: var(--header-bg);
+    color: var(--header-text);
+    padding: 1rem;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+}
+
+main {
+    padding: 1.5rem;
+}
+
+footer {
+    padding: 1rem;
+    text-align: center;
+    font-size: 0.875rem;
+    color: #6c757d;
+}
+
+.dashboard h2 {
+    margin-top: 0;
+}
+
+/* Models listing table */
+.models-listing h2 {
+    margin-top: 0;
+    margin-bottom: 0.25rem;
+}
+
+.unit-note {
+    margin: 0 0 1rem;
+    color: #6c757d;
+    font-size: 0.875rem;
+}
+
+.table-scroll {
+    overflow-x: auto;
+}
+
+.models-table {
+    width: 100%;
+    border-collapse: collapse;
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+}
+
+.models-table th,
+.models-table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #dee2e6;
+    text-align: left;
+    vertical-align: top;
+}
+
+.models-table thead th {
+    background-color: var(--header-bg);
+    color: var(--header-text);
+    font-weight: 600;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+}
+
+.models-table tbody tr:nth-child(even) {
+    background-color: #f8f9fa;
+}
+
+.models-table tbody tr:hover {
+    background-color: #e9ecef;
+}
+
+.models-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.models-table .model-name {
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.models-table .empty-state {
+    text-align: center;
+    color: #6c757d;
+    padding: 1.5rem;
+}

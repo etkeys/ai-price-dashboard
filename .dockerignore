@@ -1,0 +1,36 @@
+# Git metadata
+.git
+.gitignore
+
+# Local Python environments
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# Secrets and local state
+.env
+*.db
+instance/
+
+# Research / docs not needed at runtime
+_research/
+*.md
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.egg-info/
+build/
+dist/

@@ -1,0 +1,11 @@
+# Production dependencies for ai-price-dashboard.
+# Install with: pip install -r requirements.txt
+#
+# This file records minimum compatible versions rather than exact pins.
+# For a reproducible install, generate a lock file (e.g. pip-compile or uv).
+
+Flask>=3.0.0
+Flask-SQLAlchemy>=3.1.0
+Flask-Migrate>=4.0.0
+python-dotenv>=1.0.0
+gunicorn>=23.0.0

@@ -1,0 +1,29 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-price-dashboard:latest
+    container_name: ai-price-dashboard
+    ports:
+      - "8000:8000"
+    environment:
+      # Required: ProductionConfig fails loudly if this is empty or unset.
+      # Set it via an .env file (gitignored) or directly in your shell before running compose.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in your environment or .env file}
+      FLASK_CONFIG: production
+      # Persist the SQLite database on a named volume.
+      # Four slashes make the path absolute inside the container.
+      DATABASE_URL: sqlite:////data/app.db
+    volumes:
+      - app-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status == 200 else 1)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  app-data:
