@@ -16,10 +16,6 @@ def create_app(config_name: str = "default") -> Flask:
     from app.extensions import db, migrate
 
     db.init_app(app)
-
-    # Register SQLAlchemy models so metadata is populated for migrations.
-    from app import models  # noqa: F401
-
     migrate.init_app(app, db)
 
     # Register Jinja template helpers.

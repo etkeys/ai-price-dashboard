@@ -35,9 +35,7 @@ A Flask application for tracking and displaying AI-related prices.
   - `__init__.py` — Application factory (`create_app`)
   - `config.py` — Environment-based configuration classes
   - `extensions.py` — Flask extension instances (db, migrate)
-  - `models/` — SQLAlchemy data models
   - `routes/` — Flask blueprints
-  - `services/` — Business logic
   - `templates/` — Jinja2 templates
   - `static/` — CSS/JS assets
   - `utils/` — Helper functions
