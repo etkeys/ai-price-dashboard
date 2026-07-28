@@ -61,13 +61,22 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           if [ "${{ github.event_name }}" = "release" ]; then
             VERSION="${{ github.event.release.tag_name }}"
-            echo "tags=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+            echo "tag_version=${IMAGE}:${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "tag_latest=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=${IMAGE}:pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+            echo "tag_version=${IMAGE}:pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Build docker image
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            docker build -t "${{ steps.meta.outputs.tag_version }}" -t "${{ steps.meta.outputs.tag_latest }}" .
+          else
+            docker build -t "${{ steps.meta.outputs.tag_version }}" .
+          fi
 
       - name: Log in to private registry
         run: |
@@ -75,14 +84,12 @@ jobs:
             | docker login ${{ env.REGISTRY }} \
                 -u "${{ secrets.REGISTRY_USER }}" --password-stdin
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Push docker image
+        run: |
+          docker push "${{ steps.meta.outputs.tag_version }}"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            docker push "${{ steps.meta.outputs.tag_latest }}"
+          fi
 
       - name: Log out of private registry
         if: always()
