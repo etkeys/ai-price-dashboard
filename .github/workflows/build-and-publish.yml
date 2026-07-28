@@ -1,0 +1,89 @@
+name: Build and publish
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: cr.etkeys.xyz:31500
+  IMAGE_NAME: ai-price-dashboard
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run tests
+        run: pytest
+
+  build-and-publish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+          ping: cr.etkeys.xyz
+
+      - name: Trust private registry certificate
+        run: |
+          printf '%s\n' "${{ secrets.REGISTRY_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/cr.etkeys.xyz.crt > /dev/null
+          sudo update-ca-certificates
+          sudo systemctl restart docker
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute image tags
+        id: meta
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            echo "tags=${IMAGE}:${VERSION},${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=${IMAGE}:pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to private registry
+        run: |
+          printf '%s' "${{ secrets.REGISTRY_PASSWORD }}" \
+            | docker login ${{ env.REGISTRY }} \
+                -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Log out of private registry
+        if: always()
+        run: docker logout ${{ env.REGISTRY }}
