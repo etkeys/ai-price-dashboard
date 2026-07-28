@@ -1,5 +1,8 @@
 """Sample AI model listing data.
 
+This module is the seed source of truth for the application database. New
+installs are populated from ``SAMPLE_MODELS`` via ``flask seed``.
+
 Public symbol:
     SAMPLE_MODELS: list[dict] - 22 AI models with pricing, context window,
     and modality information as per the home-page mockup.

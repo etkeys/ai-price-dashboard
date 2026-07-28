@@ -1,6 +1,19 @@
 """Application factory for the ai-price-dashboard Flask app."""
 
 from flask import Flask
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
+
+def _set_sqlite_pragma(dbapi_connection, connection_record):
+    """Enable foreign key enforcement for every SQLite connection."""
+    if type(dbapi_connection).__module__ == "sqlite3":
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
+event.listens_for(Engine, "connect")(_set_sqlite_pragma)
 
 
 def create_app(config_name: str = "default") -> Flask:
@@ -12,11 +25,19 @@ def create_app(config_name: str = "default") -> Flask:
 
     app.config.from_object(config[config_name]())
 
+    # Import models so db.metadata is populated before Alembic runs.
+    from app import models
+
     # Initialize extensions against the app.
     from app.extensions import db, migrate
 
     db.init_app(app)
     migrate.init_app(app, db)
+
+    # Register custom Flask CLI commands.
+    from app.commands import register_commands
+
+    register_commands(app)
 
     # Register Jinja template helpers.
     from app.utils.helpers import format_context, format_price
