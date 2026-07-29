@@ -3,6 +3,7 @@
 import pytest
 
 from app import create_app
+from app.commands import seed_database
 from app.extensions import db
 
 
@@ -21,4 +22,12 @@ def app():
 @pytest.fixture
 def client(app):
     """Return a test client for the app."""
+    return app.test_client()
+
+
+@pytest.fixture
+def seeded_client(app):
+    """Return a test client whose in-memory database has been seeded."""
+    with app.app_context():
+        seed_database()
     return app.test_client()

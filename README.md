@@ -21,13 +21,21 @@ A Flask application for tracking and displaying AI-related prices.
    cp .env.example .env
    ```
 
-4. Run the development server:
+4. Create the SQLite database and seed the sample models:
+   ```bash
+   flask --app run:app db upgrade
+   flask --app run:app seed
+   ```
+   The default `sqlite:///app.db` resolves under the Flask instance folder
+   (`<repo>/instance/app.db`).
+
+5. Run the development server:
    ```bash
    python run.py
    ```
    This always uses `DevelopmentConfig`; no `FLASK_CONFIG` or `SECRET_KEY` is required.
 
-5. Open http://127.0.0.1:5000 in your browser.
+6. Open http://127.0.0.1:5000 in your browser.
 
 ## Project Structure
 
@@ -35,13 +43,36 @@ A Flask application for tracking and displaying AI-related prices.
   - `__init__.py` — Application factory (`create_app`)
   - `config.py` — Environment-based configuration classes
   - `extensions.py` — Flask extension instances (db, migrate)
+  - `models/` — SQLAlchemy model definitions
+  - `commands.py` — Custom Flask CLI commands (e.g. `flask seed`)
   - `routes/` — Flask blueprints
   - `templates/` — Jinja2 templates
   - `static/` — CSS/JS assets
   - `utils/` — Helper functions
+  - `data/` — Seed data modules
 - `tests/` — Pytest test suite
 - `migrations/` — Database migrations (generated via Flask-Migrate)
 - `run.py` — Development entry point
+
+## Database
+
+The application uses a persistent SQLite database via Flask-SQLAlchemy and
+Flask-Migrate.
+
+- **New installs** self-seed with the 22 sample models from
+  `app/data/sample_models.py` when you run `flask seed` or use the Docker
+  entrypoint.
+- **Schema changes** are applied with `flask db upgrade`; `create_app()` does
+  not perform any DDL, so it is safe to run multi-worker Gunicorn deployments.
+- **Development DB location:** the default `sqlite:///app.db` resolves under
+  `<repo>/instance/app.db`. Delete `instance/app.db` and rerun `flask db
+  upgrade && flask seed` to reset.
+- **Container DB location:** `docker-compose.yml` mounts `/data` from an
+  `app-data` named volume and sets `DATABASE_URL=sqlite:////data/app.db`, so
+  data survives container restarts.
+- **Re-seeding:** `flask seed --force` deletes existing model rows and re-seeds
+  from `SAMPLE_MODELS`. This is intended for development only and is not run by
+  the container entrypoint.
 
 ## Health Check
 
@@ -65,9 +96,8 @@ endpoint if they become necessary.
 
 ## Production
 
-Use a WSGI server such as Gunicorn. The WSGI entry point reads the
-`FLASK_CONFIG` environment variable and defaults to `production`, so the
-documented command always runs with `ProductionConfig`:
+Use a WSGI server such as Gunicorn. The provided `docker-entrypoint.sh` runs
+migrations and seeding once before exec'ing Gunicorn:
 
 ```bash
 # Make sure SECRET_KEY is set to a real, secret value.
