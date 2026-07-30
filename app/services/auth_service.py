@@ -77,7 +77,7 @@ def _hash_secret(secret: str) -> str:
 
 
 def _constant_time_equals(a: str, b: str) -> bool:
-    """Constant-time string comparison using hmac.compare_digest."""
+    """Constant-time hex-string comparison using hmac.compare_digest."""
     return hmac.compare_digest(a, b)
 
 
@@ -198,13 +198,17 @@ def _maybe_touch_key(row: ApiKey, now: datetime.datetime) -> None:
 
 def resolve_principal(
     request: Request | None,
-    *,
-    log: bool = True,
 ) -> Principal | None:
     """Resolve an ``Authorization: *** header into a :class:`Principal`.
 
     Handles API keys and session tokens; recovery keys are rejected outright.
-    The caller is responsible for enforcing roles (see ``require_role``).
+    Token authentication uses a two-step lookup: fetch by ``kid``, then compare
+    the stored hash with ``hmac.compare_digest`` in constant time. The caller is
+    responsible for enforcing roles (see ``require_role``).
+
+    This function intentionally does **not** write an ``auth_success`` audit row;
+    per-request audit logging would turn every authenticated read into a SQLite
+    write. See the design doc \u00a76.6 and the ``_maybe_touch_*`` helpers.
     """
     if request is None:
         return None
@@ -225,14 +229,11 @@ def resolve_principal(
     prefix, kid, secret = parsed
     secret_hash = _hash_secret(secret)
     now = _utcnow()
-    remote_addr = request.remote_addr
 
     # Sessions (apds)
     if prefix == TOKEN_PREFIX_SESSION:
-        row = db.session.scalar(
-            select(AuthSession).where(AuthSession.kid == kid, AuthSession.secret_hash == secret_hash)
-        )
-        if row is None:
+        row = db.session.scalar(select(AuthSession).where(AuthSession.kid == kid))
+        if row is None or not _constant_time_equals(row.secret_hash, secret_hash):
             return None
         if not _is_session_live(row, now):
             return None
@@ -240,49 +241,29 @@ def resolve_principal(
         if parent is None or not _is_key_live(parent, now):
             return None
         _maybe_touch_session(row, now)
-        principal = Principal(
+        return Principal(
             kind=PrincipalKind.SESSION,
             kid=row.kid,
             api_key_id=parent.id,
             name=parent.name,
             role=parent.role,
         )
-        if log:
-            _log_event(
-                "auth_success",
-                kid=row.kid,
-                actor_key_id=parent.id,
-                remote_addr=remote_addr,
-                detail="via session token",
-            )
-        return principal
 
     # API keys (apdk)
     if prefix == TOKEN_PREFIX_API_KEY:
-        row = db.session.scalar(
-            select(ApiKey).where(ApiKey.kid == kid, ApiKey.secret_hash == secret_hash)
-        )
-        if row is None:
+        row = db.session.scalar(select(ApiKey).where(ApiKey.kid == kid))
+        if row is None or not _constant_time_equals(row.secret_hash, secret_hash):
             return None
         if not _is_key_live(row, now):
             return None
         _maybe_touch_key(row, now)
-        principal = Principal(
+        return Principal(
             kind=PrincipalKind.KEY,
             kid=row.kid,
             api_key_id=row.id,
             name=row.name,
             role=row.role,
         )
-        if log:
-            _log_event(
-                "auth_success",
-                kid=row.kid,
-                actor_key_id=row.id,
-                remote_addr=remote_addr,
-                detail="via api key",
-            )
-        return principal
 
     # Recovery keys are not accepted as general bearer credentials.
     return None
@@ -473,12 +454,4 @@ def claim_recovery_key(raw_token: str, name: str, remote_addr: str | None = None
         raise
 
 
-def _mask_token(token: str) -> str:
-    """Return a developer/log-safe rendering of a token (never the full secret)."""
-    if len(token) < 12:
-        return "<short>"
-    return token[:9] + "..."
-
-
-# HTML escape helper for safe template rendering of user-controlled names.
 safe_name = html.escape

@@ -13,6 +13,7 @@ from app.services.auth_service import (
     Principal,
     PrincipalKind,
     ROLE_UPDATER,
+    _constant_time_equals,
     has_role,
     parse_token,
     resolve_principal,
@@ -154,14 +155,19 @@ def create_session():
     if parsed is None or parsed[0] != TOKEN_PREFIX_API_KEY:
         return _auth_error(401, "Invalid key", None)
 
-    # Resolve manually to avoid writing an auth_success event for a raw key exchange.
+    # The raw key is in the request body, not the Authorization header, so we
+    # resolve it manually using the same two-step lookup as resolve_principal.
     from app.services.auth_service import _hash_secret, _is_key_live, _utcnow
 
     now = _utcnow()
     kid = parsed[1]
     secret = parsed[2]
-    row = ApiKey.query.filter_by(kid=kid, secret_hash=_hash_secret(secret)).first()
-    if row is None or not _is_key_live(row, now):
+    row = ApiKey.query.filter_by(kid=kid).first()
+    if (
+        row is None
+        or not _constant_time_equals(row.secret_hash, _hash_secret(secret))
+        or not _is_key_live(row, now)
+    ):
         return _auth_error(401, "Invalid key", None)
 
     session_model, token = create_auth_session(row, remote_addr=_remote_address())
@@ -202,10 +208,12 @@ def delete_session():
     if parsed is None or parsed[0] != TOKEN_PREFIX_SESSION:
         return _auth_error(401, "Invalid session", None)
 
-    session_model = AuthSession.query.filter_by(
-        kid=parsed[1], secret_hash=_hash_secret(parsed[2])
-    ).first()
-    if session_model is None or session_model.revoked_at is not None:
+    session_model = AuthSession.query.filter_by(kid=parsed[1]).first()
+    if (
+        session_model is None
+        or not _constant_time_equals(session_model.secret_hash, _hash_secret(parsed[2]))
+        or session_model.revoked_at is not None
+    ):
         return _auth_error(401, "Invalid session", None)
 
     revoke_auth_session(session_model)

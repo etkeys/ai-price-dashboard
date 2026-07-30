@@ -567,8 +567,8 @@ is sniffable and none of the above matters.
 ### 6.5 Audit trail
 
 New table `auth_events`, append-only, no updates, no deletes:
-`created_at`, `event` (`auth_success | auth_failure | key_created | key_revoked |
-session_created | session_revoked | recovery_issued | recovery_claimed`),
+- `created_at`, `event` (`auth_failure | key_created | key_revoked |
+  session_created | session_revoked | recovery_issued | recovery_claimed`),
 `kid` (nullable), `actor_key_id` (nullable), `remote_addr`, `detail` (short
 text, **no secrets**).
 
@@ -590,8 +590,11 @@ required:
    minute per principal.
 2. **Write `auth_events` for failures and lifecycle events, not for every
    success.** Logging `auth_success` on every request reintroduces exactly the
-   problem. Recommended: record `auth_success` only when a session is created,
-   and rely on the throttled `last_used_at` for ongoing activity.
+   problem. `auth_success` is intentionally omitted; record `auth_failure` and
+   lifecycle events (`key_created`, `key_revoked`, `session_created`,
+   `session_revoked`, `recovery_issued`, `recovery_claimed`) only. Ongoing
+   activity is visible from the throttled `last_used_at` / `last_seen_at`
+   timestamps.
 
 Additionally note — `PRAGMA journal_mode=WAL` is **not** currently set; only
 `foreign_keys=ON` is (`app/__init__.py:8-16`). WAL would materially improve
