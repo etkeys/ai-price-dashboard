@@ -93,6 +93,12 @@ In the Docker entrypoint this runs automatically after `flask seed`, so `docker 
 
 ### Creating and using API keys
 
+Administrators can list all keys in the database via the CLI:
+
+```bash
+flask --app run:app auth list-keys
+```
+
 Administrators can create keys via the CLI:
 
 ```bash
