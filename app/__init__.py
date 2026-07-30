@@ -45,8 +45,12 @@ def create_app(config_name: str = "default") -> Flask:
     app.jinja_env.globals.update(format_context=format_context, format_price=format_price)
 
     # Register blueprints.
+    from app.auth import auth_bp
+    from app.routes.admin import admin_bp
     from app.routes.main import main_bp
 
     app.register_blueprint(main_bp)
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
 
     return app
