@@ -74,6 +74,92 @@ Flask-Migrate.
   from `SAMPLE_MODELS`. This is intended for development only and is not run by
   the container entrypoint.
 
+## Authentication
+
+Protected actions use opaque API-key tokens instead of passwords. There are two roles:
+
+- **updater** — can perform mutating actions on model data (once those endpoints exist).
+- **administrator** — can create and revoke API keys, plus everything an updater can do.
+
+### Obtaining the first Administrator key
+
+On a fresh database, run the bootstrap command:
+
+```bash
+flask --app run:app auth bootstrap
+```
+
+In the Docker entrypoint this runs automatically after `flask seed`, so `docker compose up` leaves a one-time Administrator token in the container logs. Copy it, create a personal key, and revoke the `bootstrap` key.
+
+### Creating and using API keys
+
+Administrators can list all keys in the database via the CLI:
+
+```bash
+flask --app run:app auth list-keys
+```
+
+Administrators can create keys via the CLI:
+
+```bash
+flask --app run:app auth create-key --name "price-scraper" --role updater
+```
+
+or via the HTTP API (Administrator only):
+
+```bash
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"price-scraper","role":"updater"}' \
+  http://127.0.0.1:5000/admin/keys
+```
+
+The plaintext token is returned only once. Revoke a key with:
+
+```bash
+flask --app run:app auth revoke-key <kid>
+```
+
+or `POST /admin/keys/<kid>/revoke`. An administrator cannot revoke the key backing their own session.
+
+### Browser sessions
+
+For interactive use, paste an API key once to exchange it for a short-lived session token that is kept in `sessionStorage` (tab-scoped). The browser sends the session token as:
+
+```
+Authorization: Bearer apds....
+```
+
+Closing the tab destroys the session token. Signing out also revokes the session server-side.
+
+Agents and scripts should use the long-lived API key directly on every request:
+
+```
+Authorization: Bearer apdk....
+```
+
+### Recovery
+
+If all Administrator keys are lost, someone with container access can issue a recovery key:
+
+```bash
+flask --app run:app auth recovery-key
+```
+
+This prints a single-use `apdr.…` token valid for 15 minutes. Redeem it in the browser:
+
+```bash
+curl -H "Content-Type: application/json" \
+  -d '{"recovery_key":"apdr...","name":"new-admin"}' \
+  http://127.0.0.1:5000/auth/recovery/claim
+```
+
+A recovery key cannot be used as a general bearer credential; it only mints one Administrator key.
+
+### Transport security
+
+Bearer tokens in headers are only safe over a trusted channel. Plaintext HTTP over an untrusted network exposes every key. Run the service behind a TLS-terminating reverse proxy or on a trusted overlay network.
+
 ## Health Check
 
 `GET /health` is an unauthenticated, shallow liveness endpoint used by load
