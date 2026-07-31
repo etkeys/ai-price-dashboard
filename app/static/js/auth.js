@@ -205,6 +205,10 @@ function renderAuthHeader() {
     if (adminLink) {
       adminLink.style.display = 'inline-block';
     }
+    const adminModelsLink = document.getElementById('admin-models-link');
+    if (adminModelsLink) {
+      adminModelsLink.style.display = 'inline-block';
+    }
   } else {
     // Signed out: show authenticate button.
     const div = document.createElement('div');
@@ -222,6 +226,10 @@ function renderAuthHeader() {
     const adminLink = document.getElementById('admin-keys-link');
     if (adminLink) {
       adminLink.style.display = 'none';
+    }
+    const adminModelsLink = document.getElementById('admin-models-link');
+    if (adminModelsLink) {
+      adminModelsLink.style.display = 'none';
     }
   }
 }
