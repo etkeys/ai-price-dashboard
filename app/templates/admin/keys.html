@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+
+{% block title %}Administrator Keys | AI Price Dashboard{% endblock %}
+
+{% block content %}
+<section class="admin-keys-page">
+    <h2>API Key Management</h2>
+
+    <div id="keys-container" class="keys-container">
+        <p class="loading">Loading keys...</p>
+    </div>
+
+    <section class="create-key-section">
+        <h3>Create New Key</h3>
+        <form id="create-key-form" class="create-key-form">
+            <div class="form-group">
+                <label for="key-name">Key Name:</label>
+                <input id="key-name" type="text" placeholder="e.g., 'Production API'" required />
+            </div>
+            <div class="form-group">
+                <label for="key-role">Role:</label>
+                <select id="key-role" required>
+                    <option value="updater">Updater</option>
+                    <option value="administrator">Administrator</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="key-expires">Expires (optional):</label>
+                <input id="key-expires" type="datetime-local" />
+            </div>
+            <button type="submit" class="btn btn-primary">Create Key</button>
+        </form>
+    </section>
+
+    <!-- Modal for displaying newly created token -->
+    <dialog id="token-display-dialog" class="token-display-dialog">
+        <div class="dialog-content">
+            <h3>Key Created Successfully</h3>
+            <p class="warning">This token will not be shown again. Copy it now and store it securely.</p>
+            <div class="token-display">
+                <input id="displayed-token" type="text" readonly class="token-input" />
+                <button type="button" class="btn btn-secondary" onclick="copyToClipboard()">Copy</button>
+            </div>
+            <button type="button" class="btn btn-primary" onclick="document.getElementById('token-display-dialog').close()">Done</button>
+        </div>
+    </dialog>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/admin-keys.js') }}"></script>
+{% endblock %}

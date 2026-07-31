@@ -1,6 +1,6 @@
-"""Administrator key-management API."""
+"""Administrator key-management API and pages."""
 
-from flask import Blueprint, Response, make_response, request
+from flask import Blueprint, Response, make_response, render_template, request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -33,6 +33,12 @@ def _admin_error(status: int, message: str) -> Response:
     response = make_response(jsonify({"error": message}), status)
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@admin_bp.route("/keys/manage", methods=["GET"])
+def keys_page():
+    """Render the key management page (public shell; data is protected via @require_role)."""
+    return render_template("admin/keys.html")
 
 
 @admin_bp.route("/keys", methods=["GET"])
