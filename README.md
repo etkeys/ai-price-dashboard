@@ -78,8 +78,8 @@ Flask-Migrate.
 
 Protected actions use opaque API-key tokens instead of passwords. There are two roles:
 
-- **updater** — can perform mutating actions on model data (once those endpoints exist).
-- **administrator** — can create and revoke API keys, plus everything an updater can do.
+- **updater** — reserved for value updates on existing model rows; it cannot create models.
+- **administrator** — can create models, create and revoke API keys, plus everything an updater can do.
 
 ### Obtaining the first Administrator key
 
@@ -135,8 +135,35 @@ Closing the tab destroys the session token. Signing out also revokes the session
 Agents and scripts should use the long-lived API key directly on every request:
 
 ```
-Authorization: Bearer apdk....
+Authorization: Bearer ***
 ```
+
+### Adding a model
+
+Administrators can add a model from the browser. Sign in with an Administrator
+API key using the **Authenticate** control in the header, then open **Add Model**
+from the navigation. All model attributes are required, including at least one
+input modality and one output modality.
+
+The equivalent HTTP request is:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "vendor/model-slug",
+    "price_in": 1.0,
+    "price_out": 2.0,
+    "context_tokens": 128000,
+    "input_content": ["Text"],
+    "output_content": ["Text"]
+  }' \
+  http://127.0.0.1:5000/admin/models
+```
+
+The endpoint returns `201` with the new model's ID and name. It is restricted to
+Administrators; updater keys receive `403 Forbidden`.
 
 ### Recovery
 
