@@ -8,14 +8,48 @@
 </head>
 <body>
     <header>
-        <h1>AI Price Dashboard</h1>
+        <div class="header-content">
+            <h1>AI Price Dashboard</h1>
+            <div id="auth-control" class="auth-control"></div>
+        </div>
+        <nav class="header-nav">
+            <a href="/" class="nav-link">Models</a>
+            <a href="/admin/keys/manage" id="admin-keys-link" class="nav-link" style="display: none;">Keys</a>
+        </nav>
     </header>
+
+    <!-- Sign-in dialog: modal for entering API key -->
+    <dialog id="sign-in-dialog" class="sign-in-dialog">
+        <div class="dialog-content">
+            <h2>Authenticate</h2>
+            <form id="sign-in-form">
+                <label for="sign-in-key">API Key:</label>
+                <input
+                    id="sign-in-key"
+                    type="password"
+                    placeholder="Paste your API key (apdk.*)"
+                    required
+                />
+                <div id="sign-in-error" class="error-message" style="display: none;"></div>
+                <div class="dialog-actions">
+                    <button type="submit" class="btn btn-primary">Authenticate</button>
+                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('sign-in-dialog').close()">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </dialog>
+
     <main>
         {% block content %}{% endblock %}
     </main>
+
     <footer>
         <p>Built with Flask</p>
     </footer>
+
+    <!-- Load auth.js before any page-specific scripts that call authFetch -->
+    <script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+    {% block scripts %}{% endblock %}
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 </html>
