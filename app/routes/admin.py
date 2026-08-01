@@ -220,7 +220,7 @@ def models_page():
 @admin_bp.route("/models", methods=["POST"])
 @require_role(ROLE_ADMINISTRATOR)
 def create_model():
-    """Create an AI model. All optional attributes must be provided together."""
+    """Create an AI model. All model attributes are required."""
     data = request.get_json(silent=True) or {}
     name = data.get("name")
     name = name.strip() if isinstance(name, str) else ""
@@ -230,14 +230,12 @@ def create_model():
     if len(name) > 128:
         return _admin_error(400, "'name' must be at most 128 characters")
 
-    # Check if any optional attribute is supplied; if so, all must be supplied.
-    optional_fields = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
-    supplied = [f for f in optional_fields if f in data and data[f] not in (None, "")]
+    # Check that every model attribute is supplied.
+    required_fields = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
+    supplied = [f for f in required_fields if f in data and data[f] not in (None, "")]
 
-    if supplied and len(supplied) != len(optional_fields):
-        return _admin_error(400, "All optional model attributes must be provided together")
-    if not supplied:
-        return _admin_error(400, "All optional model attributes must be provided together")
+    if len(supplied) != len(required_fields):
+        return _admin_error(400, "All model attributes are required")
 
     # Validate prices and context_tokens.
     try:
@@ -305,4 +303,6 @@ def create_model():
         db.session.rollback()
         return _admin_error(409, f"A model named '{name}' already exists")
 
-    return make_response(jsonify({"id": model.id, "name": model.name}), 201)
+    response = make_response(jsonify({"id": model.id, "name": model.name}), 201)
+    response.headers["Cache-Control"] = "no-store"
+    return response

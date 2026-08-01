@@ -1,6 +1,6 @@
 /**
  * Administrator model-creation form.
- * Validates that all optional fields are provided together.
+ * Validates that all model attributes are provided.
  */
 document.addEventListener('DOMContentLoaded', () => {
   const form = document.getElementById('create-model-form');
@@ -43,35 +43,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const inputContent = getCheckedValues('input-content');
     const outputContent = getCheckedValues('output-content');
 
-    // Check: name is required
-    if (!name) {
-      showMessage('Model name is required.');
-      return;
-    }
-
-    // Collect "supplied" optional fields (non-empty).
-    const optionalFields = {
-      price_in: priceInStr,
-      price_out: priceOutStr,
-      context_tokens: contextStr,
-      input_content: inputContent,
-      output_content: outputContent,
-    };
-
-    const supplied = Object.entries(optionalFields).filter(([, value]) => {
-      if (Array.isArray(value)) return value.length > 0;
-      return value !== '';
-    });
-
-    // All optional fields must be supplied together.
-    if (supplied.length > 0 && supplied.length < Object.keys(optionalFields).length) {
-      showMessage('Provide all optional model attributes, or leave all of them blank.');
-      return;
-    }
-
-    // If nothing optional is supplied, error (all must be provided together).
-    if (supplied.length === 0) {
-      showMessage('Provide all optional model attributes.');
+    const requiredFields = [
+      ['Model name', name],
+      ['Price in', priceInStr],
+      ['Price out', priceOutStr],
+      ['Context tokens', contextStr],
+      ['Input content modalities', inputContent],
+      ['Output content modalities', outputContent],
+    ];
+    const missingField = requiredFields.find(([, value]) =>
+      Array.isArray(value) ? value.length === 0 : value === ''
+    );
+    if (missingField) {
+      showMessage(`${missingField[0]} is required.`);
       return;
     }
 

@@ -19,6 +19,7 @@ class TestCreateModel:
 
     def test_updater_returns_403(self, client, app):
         """Non-administrator gets 403."""
+        # D-006 and D-007: structural model creation is administrator-only.
         with app.app_context():
             _, token = create_api_key(name="updater", role=ROLE_UPDATER)
         resp = client.post(
@@ -61,10 +62,11 @@ class TestCreateModel:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 400
-        assert "All optional" in resp.json["error"]
+        assert "All model attributes" in resp.json["error"]
 
     def test_all_optional_missing_returns_400(self, client, app):
         """Supplying no optional fields returns 400."""
+        # D-005: all model attributes are required by the schema.
         with app.app_context():
             _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
         resp = client.post(
@@ -73,7 +75,7 @@ class TestCreateModel:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 400
-        assert "All optional" in resp.json["error"]
+        assert "All model attributes" in resp.json["error"]
 
     def test_invalid_price_values_return_400(self, client, app):
         """Non-numeric prices return 400."""
