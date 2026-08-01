@@ -17,7 +17,7 @@ class TestCreateModel:
 
         assert resp.status_code == 200
         assert not re.search(
-            rb'<input\b(?=[^>]*\btype="checkbox"\b)(?=[^>]*\brequired\b)[^>]*>',
+            rb'<input\b(?=[^>]*type="checkbox")[^>]*\brequired\b[^>]*>',
             resp.data,
         )
 
