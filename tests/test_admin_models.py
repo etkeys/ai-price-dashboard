@@ -1,5 +1,7 @@
 """Tests for admin model-creation feature (administrator-only add model)."""
 
+import re
+
 import pytest
 from app.models.auth import ROLE_ADMINISTRATOR, ROLE_UPDATER
 from app.models import AiModel
@@ -8,6 +10,16 @@ from app.services.auth_service import create_api_key
 
 class TestCreateModel:
     """Model creation endpoint tests."""
+
+    def test_model_form_does_not_require_first_modality_checkbox(self, client):
+        """The modality requirement is enforced by JavaScript at group level."""
+        resp = client.get("/admin/models/manage")
+
+        assert resp.status_code == 200
+        assert not re.search(
+            rb'<input\b(?=[^>]*\btype="checkbox"\b)(?=[^>]*\brequired\b)[^>]*>',
+            resp.data,
+        )
 
     def test_unauthenticated_returns_401(self, client):
         """POST /admin/models without auth returns 401."""

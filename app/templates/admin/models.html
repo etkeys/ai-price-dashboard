@@ -34,7 +34,7 @@
             <legend>Input content modalities *</legend>
             {% for modality in modalities %}
             <label>
-                <input type="checkbox" name="input-content" value="{{ modality }}"{% if loop.first %} required{% endif %} />
+                <input type="checkbox" name="input-content" value="{{ modality }}" />
                 {{ modality }}
             </label>
             {% endfor %}
@@ -44,7 +44,7 @@
             <legend>Output content modalities *</legend>
             {% for modality in modalities %}
             <label>
-                <input type="checkbox" name="output-content" value="{{ modality }}"{% if loop.first %} required{% endif %} />
+                <input type="checkbox" name="output-content" value="{{ modality }}" />
                 {{ modality }}
             </label>
             {% endfor %}
