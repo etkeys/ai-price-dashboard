@@ -11,7 +11,7 @@ file wins for work inside this repo.
 
 ## 1. The decisions log is read first, always
 
-`_research/DECISIONS.md` is the append-only record of operator rulings and
+`_research/DECISION.md` is the append-only record of operator rulings and
 standing agent assumptions.
 
 - **Chip** reads it before writing any research doc or spec, and cites relevant
@@ -44,7 +44,7 @@ must state:
 2. **the cost to reverse it.**
 
 Dale proceeds against these. Erik may never read them; that is the point. Each
-one gets a corresponding `ASSUMED` entry in `DECISIONS.md`.
+one gets a corresponding `ASSUMED` entry in `DECISION.md`.
 
 ### §B — Decisions required (BLOCKING)
 
@@ -93,7 +93,7 @@ reference implementation):
   directly into work with no second research pass.
 
 Chip blocks his ticket as stating that he needs operator ruling. Once ruled,
-Chip transcribes the answer into `DECISIONS.md`, he finishes his plan, edits
+Chip transcribes the answer into `DECISION.md`, he finishes his plan, edits
 Dale's and Kova's tickets as needed to reflect the ruling (he may only be able
 to add comments), and completes his ticket. Dale's implementation tickets will
 then auto promote to `ready`.
