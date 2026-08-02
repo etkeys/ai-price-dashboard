@@ -61,14 +61,16 @@ def test_index_page_row_count(seeded_client):
     assert row_count == len(SAMPLE_MODELS)
 
 
-def test_index_page_preserves_modality_ordering(seeded_client):
-    """Modality ordering per model survives the round-trip from the database."""
+def test_index_page_renders_modalities_alphabetically(seeded_client):
+    """The home page renders modalities alphabetically, apart from persisted order."""
     response = seeded_client.get("/")
     assert response.status_code == 200
     html = response.data.decode()
-    # google/gemini-3.5-flash input order is Text, Images, Videos, Files, Audio.
+    # google/gemini-3.5-flash is persisted as Text, Images, Videos, Files, Audio,
+    # but the rendered input order is Audio, Files, Images, Text, Videos.
     assert "google/gemini-3.5-flash" in html
-    assert "Text, Images, Videos, Files, Audio" in html
+    assert "Audio, Files, Images, Text, Videos" in html
+    assert "Text, Images, Videos, Files, Audio" not in html
 
 
 def test_index_page_uses_bounded_query_count(seeded_client, app):

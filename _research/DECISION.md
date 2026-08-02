@@ -46,6 +46,93 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-011 — Admin add-model form modality order is out of scope (documentary)
+- Status: **ASSUMED** (documentary — records a verified fact, not a choice)
+- Date raised: 2026-08-02   Date ruled: —
+- Source: `_research/2608021411_modality-display-ordering-spec.md` §7
+- Card: t_14e7d6b3
+- Assumption in force: the modality checkbox lists at
+  `app/templates/admin/models.html:35,45` are **already alphabetical** —
+  `app/routes/admin.py:217` passes `modalities=sorted(ALLOWED_MODALITIES)`. No
+  work and no follow-up card. `app/static/js/admin-models.js:68-69` therefore
+  submits modalities in alphabetical order, which is what gets persisted as
+  `position`.
+- Reversal cost: None. Nothing was changed.
+
+### D-010 — No explicit case-folding sort key for modality display
+- Status: **ASSUMED**
+- Date raised: 2026-08-02   Date ruled: —
+- Source: `_research/2608021411_modality-display-ordering-spec.md` §5
+- Card: t_14e7d6b3
+- Assumption in force: Jinja's `| sort` filter is case-insensitive by default
+  (`case_sensitive=False`, verified against Jinja 3.1.6 in `.venv`), so the
+  operator's case-insensitivity requirement is met with no extra code. No custom
+  sort key, no case-insensitivity test — the closed vocabulary at
+  `app/commands.py:37` is single-case capitalised (D-001) and
+  `app/routes/admin.py:261` rejects anything outside it, so mixed case is
+  unreachable through any supported write path.
+- Standing trap for future work: Python's `sorted()` is case-**sensitive**. If
+  this sort is ever moved out of the template into Python, `key=str.casefold`
+  becomes mandatory or the requirement silently regresses.
+- Reversal cost: Nil — the behaviour is already correct as specified.
+
+### D-009 — `test_index_page_preserves_modality_ordering` is renamed and re-pointed
+- Status: **ASSUMED**
+- Date raised: 2026-08-02   Date ruled: —
+- Source: `_research/2608021411_modality-display-ordering-spec.md` §6
+- Card: t_14e7d6b3 (implemented by t_b378287b)
+- Assumption in force: `tests/test_models_listing.py:64-71` asserts that `/`
+  renders modalities in persisted `position` order. The operator's request
+  contradicts that assertion directly, so it is renamed to
+  `test_index_page_renders_modalities_alphabetically` and re-pointed at
+  `"Audio, Files, Images, Text, Videos"` (plus a negative assertion on the old
+  string, giving red-before / green-after). Filed as ASSUMED rather than raised
+  as §B because no alternative answer exists — the change is entailed by the
+  request, not chosen.
+- Explicitly **not** changed: `tests/test_models.py:46-48` and
+  `tests/test_admin_models.py:283-308`, which pin `position`-governed
+  persistence. Those remain the home of that coverage and must not be inverted.
+- Reversal cost: Revert one test function alongside the template change; they
+  move together.
+
+### D-008 — Alphabetical modality display is presentation-only; `position` stays
+- Status: **ASSUMED**
+- Date raised: 2026-08-02   Date ruled: —
+- Source: `_research/2608021411_modality-display-ordering-spec.md` §3, §4
+- Card: t_14e7d6b3 (implemented by t_b378287b)
+- Question: where does the alphabetical sort live, and what happens to the
+  association `position` column once display no longer honours it?
+- Options: (a) Jinja `| sort` in `app/templates/index.html`; (b) sort inside the
+  `input_content` / `output_content` properties; (c) change the relationship
+  `order_by` to `Modality.name`; (d) build a sorted view-model in the route.
+- Assumption in force: **option (a)**. Two lines of
+  `app/templates/index.html:28-29` gain a `| sort` before the existing
+  `| join(', ')`. The domain model, both relationship `order_by` clauses, both
+  properties and the `position` column are untouched. `position` is retained as a
+  write-mostly column: still persisted (`app/routes/admin.py:290,298`,
+  `app/commands.py:89,97`), still the ORM read ordering
+  (`app/models/ai_model.py:126,134`), but no longer observable on any user-facing
+  surface.
+- Chip recommends: (a). It is the only option that keeps the change out of §B —
+  (b) and (c) falsify tests that pin persistence, and (c) would make `position`
+  genuinely unreferenced on every read path, converting column retirement from a
+  preference into a migration question. (d) contradicts
+  `_research/2607251644_models-listing-spec.md:167` ("Do NOT re-sort in the
+  route").
+- Consequence accepted: a dashboard reader can no longer tell what order an
+  author entered modalities in. That is the requested outcome, not a side effect.
+- No retirement card for `position` is proposed. Dropping it needs an Alembic
+  revision on two `NOT NULL` columns
+  (`migrations/versions/637848f507e4_...py:46,54`) — and because both
+  association tables are `PK(ai_model_id, modality_id)`, removing it leaves the
+  rows an unordered set with no tiebreaker, making the order data
+  unrecoverable. That needs an Erik ruling before anyone starts.
+- Reversal cost: **Display choice: trivial** — delete two filter tokens.
+  **Retiring `position` later: high** — one Alembic revision plus edits to
+  `app/routes/admin.py:285-300`, `app/commands.py:84-99`,
+  `app/models/ai_model.py:68,84,126,134` and three test files, plus permanent
+  loss of existing order data.
+
 ### D-007 — `updater` is for automated price refreshes, not structural writes
 - Status: **CONFIRMED**
 - Date raised: 2026-07-30   Date ruled: 2026-07-30
