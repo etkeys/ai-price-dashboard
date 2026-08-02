@@ -200,7 +200,9 @@ function renderAuthHeader() {
       await signOut();
     });
 
-    // Show admin link if administrator.
+    // Show admin links to any signed-in principal. The Keys page itself is
+    // administrator-only at the data layer; the create section on the Models
+    // page is gated separately on isAdministrator() inside admin-models.js.
     const adminLink = document.getElementById('admin-keys-link');
     if (adminLink) {
       adminLink.style.display = 'inline-block';
@@ -222,7 +224,7 @@ function renderAuthHeader() {
       if (dialog) dialog.showModal();
     });
 
-    // Hide admin link if not administrator.
+    // Hide admin links for signed-out principals.
     const adminLink = document.getElementById('admin-keys-link');
     if (adminLink) {
       adminLink.style.display = 'none';

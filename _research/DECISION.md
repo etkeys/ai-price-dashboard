@@ -46,6 +46,103 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-014 — No optimistic concurrency control on model updates
+- Status: **ASSUMED** (offered to Erik as non-blocking; no ruling given)
+- Date raised: 2026-08-02   Date ruled: —
+- Source: `_research/2608021645_model-edit-implementation-plan.md` §A item 5;
+  `_research/2608021650_model-edit-policy-decisions.md` §What I need from Erik, item 3
+- Card: t_d833f297 (implemented by t_1de70700)
+- Assumption in force: `PATCH /admin/models/<id>` is **last-write-wins**. No
+  `If-Match`, no `updated_at` precondition, no version column. Two updaters
+  scraping the same model concurrently can silently overwrite each other.
+  Acceptable today: single-user dashboard, one automated scraper.
+- Reversal cost: **Moderate, and it grows.** Adding a precondition later changes
+  the request contract and every client that speaks it. The deferred public REST
+  update card is where this bites — if that card ships a contract without
+  concurrency control, retrofitting becomes a breaking change for external
+  callers rather than an internal edit. Raise it again on that card.
+
+### D-013 — May the model-edit card add `PATCH /admin/models/<id>`?
+- Status: **CONFIRMED** — resolved as option (a). Chip's recommendation was accepted.
+- Date raised: 2026-08-02   Date ruled: 2026-08-02
+- Source: `_research/2608021650_model-edit-policy-decisions.md` §Question 2
+- Card: t_d833f297 (blocks t_1de70700, t_54e744a4; root t_23aec619)
+- Question: Dale's card says "do not create new REST API endpoints" and this
+  research card says "focus on the existing UI update flow". There is no
+  existing update flow — the only model write path in the repo is
+  `POST /admin/models` (`app/routes/admin.py:220-308`). No `PATCH`, no `PUT`,
+  no `DELETE`, no route accepting a model id, no hidden flags. The feature is
+  unimplementable without one new server route.
+- Options: (a) add exactly one internal endpoint
+  `PATCH /admin/models/<int:model_id>` under `/admin`, consumed only by the
+  dashboard's own JS via `authFetch`; public REST stays deferred. (b) park this
+  card until the public REST API is designed first, and build the UI against it.
+  (Rejected: reusing `POST /admin/models` as an upsert — it would break
+  `tests/test_admin_models.py:206` and silently widen creation to updaters,
+  contradicting D-006.)
+- Chip recommends: (a). Keeps the new-endpoint count at exactly one by
+  server-rendering the existing-models table from the same query `/` already
+  uses (public per D-004), rather than adding a `GET /admin/models`.
+- Ruling: **(a) Yes.** `PATCH /admin/models/<int:model_id>` may be added now.
+- Rationale (Erik): "The original wording on the ticket wasn't intended as 'do
+  not add new routes' rather 'a known use case (known to the operator at least)
+  will need to be implemented eventually and it is similar to this effort and it
+  may impact choices made now (e.g., choice of route names)'."
+- Consequences, binding on future work:
+  - The "no new REST API endpoints" clause on `t_1de70700` is amended: it
+    prohibits building the **public, agent-facing** REST surface, not adding a
+    server route the dashboard's own JS consumes.
+  - A future public update API is a known, expected use case. Naming and shape
+    chosen now should anticipate it: `PATCH` (partial update, not `PUT`), a
+    resource path addressing the model by id, and JSON in / JSON out. Prefer a
+    contract the public card can adopt verbatim under a different prefix over
+    one it has to version around.
+- Reversal cost: Low but non-zero. Once the dashboard's JS speaks this contract,
+  the deferred public REST card either adopts it or versions around it.
+
+### D-012 — May an `updater` edit modality lists, or only price/context?
+- Status: **CONFIRMED** — resolved as option (a). Chip's recommendation (b) was rejected.
+- Date raised: 2026-08-02   Date ruled: 2026-08-02
+- Source: `_research/2608021650_model-edit-policy-decisions.md` §Question 1
+- Card: t_d833f297 (blocks t_1de70700, t_54e744a4; root t_23aec619)
+- Question: Root card t_23aec619 says "all fields should be editable except
+  Model Name" for both roles, which grants `updater` write access to
+  `input_content` / `output_content`. D-007 (CONFIRMED) enumerates `updater`'s
+  remit as `PATCH`/`PUT` on "price and context fields" and does not name
+  modalities. A modality edit is not row-lifecycle (so not "structural" by the
+  letter of D-007) but it is a claim about what a model *is*, not a scraped
+  number — and it rewrites association rows, not an `ai_models` column.
+- Options: (a) `updater` edits everything except `name` — one
+  `@require_role(ROLE_UPDATER)` decorator, matches the card's literal text.
+  (b) `updater` edits `price_in`, `price_out`, `context_tokens` only; modality
+  lists are administrator-only via an in-handler `principal.is_administrator`
+  check (`app/services/auth_service.py:64-66`). (c) two endpoints split by
+  sensitivity — rejected, loses transactional atomicity for no gain over (b).
+- Chip recommends: (b). D-007's rationale — the role is defined by its intended
+  operator, a scraper — does not extend to capability metadata. The card's "all
+  fields" most likely describes the form a human sees, not a deliberate widening
+  of a role defined 48 hours earlier. Counter-argument acknowledged: (a) is
+  simpler and a wrong modality is embarrassing, not dangerous.
+- Ruling: **(a) Yes.** `updater` may alter model modality lists. `updater` edits
+  every model field except `name`.
+- Rationale (Erik): "Source data may change after administrator originally
+  created the entry within the app (not likely but possible). Updater is
+  essentially trying to sync source data with data within the app."
+- Consequences, binding on future work:
+  - This **clarifies, and does not supersede, D-007.** D-007's line is still row
+    lifecycle: `updater` never creates or deletes models. Its "price and context
+    fields" wording was enumeration by example, not an exhaustive whitelist.
+  - The governing test for an `updater` gate is now: *does this operation sync an
+    existing row with its upstream source?* If yes → `updater`. If it changes
+    which rows exist → `administrator`.
+  - Model **name** remains excluded from the edit surface entirely, for both
+    roles, per the root card. Renaming is not in scope for either role here.
+  - Implementation: a single `@require_role(ROLE_UPDATER)` decorator on
+    `PATCH /admin/models/<int:model_id>`. No in-handler `is_administrator`
+    split, no per-field gating, no disabled fieldsets in the edit dialog.
+- Reversal cost: Non-trivial in the wrong direction. Narrowing later is a 403
+  contract break for any updater client already editing modalities.
+
 ### D-011 — Admin add-model form modality order is out of scope (documentary)
 - Status: **ASSUMED** (documentary — records a verified fact, not a choice)
 - Date raised: 2026-08-02   Date ruled: —
@@ -155,6 +252,10 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
     "how dangerous does this feel".
 - Reversal cost: Conceptual, not mechanical. Reversing means redefining what
   `updater` means, which invalidates every gate chosen under this rule.
+- See also: **D-012** clarifies (does not supersede) this entry. The "price and
+  context fields" enumeration above is by example, not an exhaustive whitelist;
+  `updater` may also sync modality lists on existing rows. The row-lifecycle
+  line drawn here is unchanged.
 
 ### D-006 — Gate model writes at `updater` or `administrator`?
 - Status: **CONFIRMED** — resolved as option 2c. Chip's recommendation (2a) was rejected.

@@ -3,8 +3,9 @@
 import math
 
 from flask import Blueprint, Response, jsonify, make_response, render_template, request
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.auth import require_role
 from app.auth.decorators import get_principal
@@ -21,6 +22,8 @@ from app.services.auth_service import (
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 ALLOWED_MODALITIES = frozenset({"Text", "Images", "Files", "Videos", "Audio"})
+
+_EDITABLE_FIELDS = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
 
 
 def _key_status(row: ApiKey) -> str:
@@ -213,8 +216,97 @@ def _revoke_key(kid: str) -> Response:
 
 @admin_bp.route("/models/manage", methods=["GET"])
 def models_page():
-    """Render the model-management page; API data is administrator-only."""
-    return render_template("admin/models.html", modalities=sorted(ALLOWED_MODALITIES))
+    """Render the model-management page; mutation APIs remain protected."""
+    models = db.session.scalars(
+        select(AiModel)
+        .options(
+            selectinload(AiModel.input_modalities),
+            selectinload(AiModel.output_modalities),
+        )
+        .order_by(AiModel.name)
+    ).all()
+    return render_template(
+        "admin/models.html", models=models, modalities=sorted(ALLOWED_MODALITIES)
+    )
+
+
+def _validate_model_values(
+    data: dict, *, require_all: bool
+) -> tuple[dict | None, Response | None]:
+    """Validate model-field payloads shared by create and partial update.
+
+    Returns ``(values, None)`` on success, where ``values`` only contains keys
+    present in ``data``. Returns ``(None, error_response)`` on validation failure.
+    """
+    if require_all:
+        supplied = [f for f in _EDITABLE_FIELDS if data.get(f) not in (None, "")]
+        if len(supplied) != len(_EDITABLE_FIELDS):
+            return None, _admin_error(400, "All model attributes are required")
+
+    values: dict = {}
+    for field in _EDITABLE_FIELDS:
+        if field not in data:
+            continue
+        if data[field] in (None, ""):
+            return None, _admin_error(400, f"'{field}' is required")
+        values[field] = data[field]
+
+    try:
+        if "price_in" in values:
+            values["price_in"] = float(values["price_in"])
+        if "price_out" in values:
+            values["price_out"] = float(values["price_out"])
+        if "context_tokens" in values:
+            values["context_tokens"] = int(values["context_tokens"])
+    except (TypeError, ValueError, OverflowError):
+        return None, _admin_error(
+            400, "Prices must be numbers and context_tokens must be an integer"
+        )
+
+    if any(
+        field in values
+        and (not math.isfinite(values[field]) or values[field] < 0)
+        for field in ("price_in", "price_out")
+    ):
+        return None, _admin_error(400, "Prices must be finite numbers >= 0")
+    if "context_tokens" in values and values["context_tokens"] <= 0:
+        return None, _admin_error(400, "'context_tokens' must be greater than zero")
+
+    for field in ("input_content", "output_content"):
+        if field not in values:
+            continue
+        content = values[field]
+        if (
+            not isinstance(content, list)
+            or not content
+            or any(not isinstance(v, str) for v in content)
+        ):
+            return None, _admin_error(
+                400, f"'{field}' must be a non-empty list of modality names"
+            )
+        if len(set(content)) != len(content):
+            return None, _admin_error(400, f"'{field}' contains duplicates")
+        if not set(content).issubset(ALLOWED_MODALITIES):
+            invalid = sorted(set(content) - ALLOWED_MODALITIES)[0]
+            return None, _admin_error(400, f"'{field}' contains invalid modality: {invalid}")
+
+    return values, None
+
+
+def _modality_rows(values: dict) -> tuple[dict[str, Modality] | None, Response | None]:
+    """Resolve submitted modality names to persisted modality rows.
+
+    Returns ``(rows, None)`` on success, ``(None, error_response)`` on failure.
+    """
+    names = set(values.get("input_content", []) + values.get("output_content", []))
+    rows: dict[str, Modality] = {
+        row.name: row
+        for row in db.session.scalars(select(Modality).where(Modality.name.in_(names)))
+    }
+    missing = names - rows.keys()
+    if missing:
+        return None, _admin_error(400, f"Unknown modality: {sorted(missing)[0]}")
+    return rows, None
 
 
 @admin_bp.route("/models", methods=["POST"])
@@ -230,54 +322,27 @@ def create_model():
     if len(name) > 128:
         return _admin_error(400, "'name' must be at most 128 characters")
 
-    # Check that every model attribute is supplied.
-    required_fields = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
-    supplied = [f for f in required_fields if f in data and data[f] not in (None, "")]
-
-    if len(supplied) != len(required_fields):
-        return _admin_error(400, "All model attributes are required")
-
-    # Validate prices and context_tokens.
-    try:
-        price_in = float(data["price_in"])
-        price_out = float(data["price_out"])
-        context_tokens = int(data["context_tokens"])
-    except (TypeError, ValueError, OverflowError):
-        return _admin_error(400, "Prices must be numbers and context_tokens must be an integer")
-
-    if not (math.isfinite(price_in) and price_in >= 0 and math.isfinite(price_out) and price_out >= 0):
-        return _admin_error(400, "Prices must be finite numbers >= 0")
-    if context_tokens <= 0:
-        return _admin_error(400, "'context_tokens' must be greater than zero")
-
-    # Validate modalities.
-    content = {}
-    for field in ("input_content", "output_content"):
-        values = data[field]
-        if not isinstance(values, list) or not values or any(not isinstance(v, str) for v in values):
-            return _admin_error(400, f"'{field}' must be a non-empty list of modality names")
-        if len(set(values)) != len(values):
-            return _admin_error(400, f"'{field}' contains duplicates")
-        if not set(values).issubset(ALLOWED_MODALITIES):
-            invalid = sorted(set(values) - ALLOWED_MODALITIES)[0]
-            return _admin_error(400, f"'{field}' contains invalid modality: {invalid}")
-        content[field] = values
+    content, error = _validate_model_values(data, require_all=True)
+    if error is not None:
+        return error
+    assert content is not None  # narrow for type checker
 
     # Check uniqueness and fetch modality rows.
     if db.session.scalar(select(AiModel).where(AiModel.name == name)) is not None:
         return _admin_error(409, f"A model named '{name}' already exists")
 
-    modality_names = set(content["input_content"] + content["output_content"])
-    modality_rows = {
-        row.name: row
-        for row in db.session.scalars(select(Modality).where(Modality.name.in_(modality_names)))
-    }
-    missing = modality_names - modality_rows.keys()
-    if missing:
-        return _admin_error(400, f"Unknown modality: {sorted(missing)[0]}")
+    modality_rows, error = _modality_rows(content)
+    if error is not None:
+        return error
+    assert modality_rows is not None  # narrow for type checker
 
     # Create the model and association rows.
-    model = AiModel(name=name, price_in=price_in, price_out=price_out, context_tokens=context_tokens)
+    model = AiModel(
+        name=name,
+        price_in=content["price_in"],
+        price_out=content["price_out"],
+        context_tokens=content["context_tokens"],
+    )
     db.session.add(model)
 
     try:
@@ -304,5 +369,72 @@ def create_model():
         return _admin_error(409, f"A model named '{name}' already exists")
 
     response = make_response(jsonify({"id": model.id, "name": model.name}), 201)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@admin_bp.route("/models/<int:model_id>", methods=["PATCH"])
+@require_role("updater")
+def update_model(model_id: int):
+    """Partially update an existing model; the model name and identity fields are immutable.
+
+    D-007 (CONFIRMED) keeps row lifecycle administrator-only; this gate admits both
+    updaters and administrators by rank. D-012 (CONFIRMED) authorises editing every
+    field except the model name, including modality lists, for both roles.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data:
+        return _admin_error(400, "A non-empty JSON object is required")
+
+    immutable = {"name", "id", "created_at", "updated_at"} & data.keys()
+    if immutable:
+        return _admin_error(400, f"Cannot update field: {sorted(immutable)[0]}")
+    if not set(data).issubset(_EDITABLE_FIELDS):
+        return _admin_error(400, "Unknown model field")
+
+    model = db.session.get(AiModel, model_id)
+    if model is None:
+        return _admin_error(404, "Model not found")
+
+    values, error = _validate_model_values(data, require_all=False)
+    if error is not None:
+        return error
+    assert values is not None  # narrow for type checker
+
+    modality_rows: dict[str, Modality] | None = None
+    if "input_content" in values or "output_content" in values:
+        modality_rows, error = _modality_rows(values)
+        if error is not None:
+            return error
+        assert modality_rows is not None  # narrow for type checker
+
+    try:
+        for field in ("price_in", "price_out", "context_tokens"):
+            if field in values:
+                setattr(model, field, values[field])
+        for field, association in (
+            ("input_content", AiModelInputModality),
+            ("output_content", AiModelOutputModality),
+        ):
+            if field in values:
+                db.session.execute(
+                    delete(association).where(association.ai_model_id == model.id)
+                )
+                for position, modality_name in enumerate(values[field]):
+                    db.session.add(
+                        association(
+                            ai_model_id=model.id,
+                            modality_id=modality_rows[modality_name].id,
+                            position=position,
+                        )
+                    )
+        # Bump updated_at explicitly so modality-only edits still tick the column.
+        model.updated_at = _utcnow()
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return _admin_error(400, "Unable to update model")
+
+    response = make_response(jsonify({"id": model.id, "name": model.name}), 200)
     response.headers["Cache-Control"] = "no-store"
     return response

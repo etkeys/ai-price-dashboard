@@ -1,58 +1,157 @@
 {% extends 'base.html' %}
 
-{% block title %}Add Model | AI Price Dashboard{% endblock %}
+{% block title %}Manage Models | AI Price Dashboard{% endblock %}
 
 {% block content %}
 <section class="admin-models-page">
-    <h2>Add AI Model</h2>
-    <p class="unit-note">All model attributes are required.</p>
+    <h2>Models</h2>
+    <p class="unit-note">
+        Administrators and updaters can edit every field except the model name.
+        Creating and deleting models remains administrator-only.
+    </p>
 
-    <div id="model-form-message" class="message-box" role="alert" hidden></div>
-
-    <form id="create-model-form" class="create-model-form">
-        <div class="form-group">
-            <label for="model-name">Model name *</label>
-            <input id="model-name" type="text" required maxlength="128" placeholder="vendor/model-slug" />
-        </div>
-
-        <div class="form-group">
-            <label for="model-price-in">Price in (USD / 1M tokens) *</label>
-            <input id="model-price-in" type="number" required min="0" step="any" />
-        </div>
-
-        <div class="form-group">
-            <label for="model-price-out">Price out (USD / 1M tokens) *</label>
-            <input id="model-price-out" type="number" required min="0" step="any" />
-        </div>
-
-        <div class="form-group">
-            <label for="model-context">Context tokens *</label>
-            <input id="model-context" type="number" required min="1" step="1" />
-        </div>
-
-        <fieldset class="form-group">
-            <legend>Input content modalities *</legend>
-            {% for modality in modalities %}
-            <label>
-                <input type="checkbox" name="input-content" value="{{ modality }}" />
-                {{ modality }}
-            </label>
+    <table id="models-table" class="models-table">
+        <thead>
+            <tr>
+                <th>Model</th>
+                <th>Price In</th>
+                <th>Price Out</th>
+                <th>Context</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for model in models %}
+            <tr
+                data-model-id="{{ model.id }}"
+                data-model-name="{{ model.name }}"
+                data-price-in="{{ model.price_in }}"
+                data-price-out="{{ model.price_out }}"
+                data-context-tokens="{{ model.context_tokens }}"
+                data-input-content="{{ model.input_content | join(',') }}"
+                data-output-content="{{ model.output_content | join(',') }}"
+            >
+                <td class="cell-model-name">{{ model.name }}</td>
+                <td>{{ model.price_in }}</td>
+                <td>{{ model.price_out }}</td>
+                <td>{{ model.context_tokens }}</td>
+                <td>{{ model.input_content | sort | join(', ') }}</td>
+                <td>{{ model.output_content | sort | join(', ') }}</td>
+                <td>
+                    <button type="button" class="btn btn-secondary js-edit-model">Edit</button>
+                </td>
+            </tr>
             {% endfor %}
-        </fieldset>
+        </tbody>
+    </table>
 
-        <fieldset class="form-group">
-            <legend>Output content modalities *</legend>
-            {% for modality in modalities %}
-            <label>
-                <input type="checkbox" name="output-content" value="{{ modality }}" />
-                {{ modality }}
-            </label>
-            {% endfor %}
-        </fieldset>
+    <section class="create-model-section" id="create-model-section" hidden>
+        <h3>Add AI Model</h3>
+        <p class="unit-note">All model attributes are required.</p>
 
-        <button type="submit" class="btn btn-primary">Add model</button>
-    </form>
+        <div id="create-model-message" class="message-box" role="alert" hidden></div>
+
+        <form id="create-model-form" class="create-model-form">
+            <div class="form-group">
+                <label for="model-name">Model name *</label>
+                <input id="model-name" type="text" required maxlength="128" placeholder="vendor/model-slug" />
+            </div>
+
+            <div class="form-group">
+                <label for="model-price-in">Price in (USD / 1M tokens) *</label>
+                <input id="model-price-in" type="number" required min="0" step="any" />
+            </div>
+
+            <div class="form-group">
+                <label for="model-price-out">Price out (USD / 1M tokens) *</label>
+                <input id="model-price-out" type="number" required min="0" step="any" />
+            </div>
+
+            <div class="form-group">
+                <label for="model-context">Context tokens *</label>
+                <input id="model-context" type="number" required min="1" step="1" />
+            </div>
+
+            <fieldset class="form-group">
+                <legend>Input content modalities *</legend>
+                {% for modality in modalities %}
+                <label>
+                    <input type="checkbox" name="input-content" value="{{ modality }}" />
+                    {{ modality }}
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Output content modalities *</legend>
+                {% for modality in modalities %}
+                <label>
+                    <input type="checkbox" name="output-content" value="{{ modality }}" />
+                    {{ modality }}
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <button type="submit" class="btn btn-primary">Add model</button>
+        </form>
+    </section>
 </section>
+
+<dialog id="edit-model-dialog" class="edit-model-dialog">
+    <div class="dialog-content">
+        <h3>Edit Model</h3>
+        <div id="edit-model-message" class="message-box" role="alert" hidden></div>
+
+        <form id="edit-model-form" class="edit-model-form">
+            <div class="form-group">
+                <label for="edit-model-name">Model name</label>
+                <input id="edit-model-name" type="text" readonly />
+            </div>
+
+            <div class="form-group">
+                <label for="edit-model-price-in">Price in (USD / 1M tokens) *</label>
+                <input id="edit-model-price-in" type="number" required min="0" step="any" />
+            </div>
+
+            <div class="form-group">
+                <label for="edit-model-price-out">Price out (USD / 1M tokens) *</label>
+                <input id="edit-model-price-out" type="number" required min="0" step="any" />
+            </div>
+
+            <div class="form-group">
+                <label for="edit-model-context">Context tokens *</label>
+                <input id="edit-model-context" type="number" required min="1" step="1" />
+            </div>
+
+            <fieldset class="form-group">
+                <legend>Input content modalities *</legend>
+                {% for modality in modalities %}
+                <label>
+                    <input type="checkbox" name="edit-input-content" value="{{ modality }}" />
+                    {{ modality }}
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Output content modalities *</legend>
+                {% for modality in modalities %}
+                <label>
+                    <input type="checkbox" name="edit-output-content" value="{{ modality }}" />
+                    {{ modality }}
+                </label>
+                {% endfor %}
+            </fieldset>
+
+            <div class="dialog-actions">
+                <button type="submit" class="btn btn-primary">Save changes</button>
+                <button type="button" class="btn btn-secondary" data-action="cancel-edit">Cancel</button>
+            </div>
+        </form>
+    </div>
+</dialog>
 {% endblock %}
 
 {% block scripts %}
