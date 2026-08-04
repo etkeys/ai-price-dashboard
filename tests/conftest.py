@@ -31,3 +31,16 @@ def seeded_client(app):
     with app.app_context():
         seed_database()
     return app.test_client()
+
+
+@pytest.fixture
+def seeded_app(app):
+    """Yield an app whose in-memory database has been seeded with default models.
+
+    Useful for tests that need to create their own client but still want
+    the default model fixtures present.
+    """
+    with app.app_context():
+        seed_database()
+    yield app
+

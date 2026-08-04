@@ -1,6 +1,6 @@
 /* Admin models page styles */
 .admin-models-page {
-    max-width: 600px;
+    max-width: 960px;
     margin: 0 auto;
 }
 
@@ -8,25 +8,54 @@
     margin-top: 0;
 }
 
-.create-model-form {
+.models-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+}
+
+.models-table th,
+.models-table td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #dee2e6;
+    vertical-align: top;
+}
+
+.models-table th {
+    background-color: #f8f9fa;
+    font-weight: 600;
+}
+
+.models-table .cell-model-name {
+    font-family: monospace;
+}
+
+.create-model-section,
+.edit-model-form {
     display: flex;
     flex-direction: column;
     gap: 1rem;
 }
 
-.create-model-form .form-group {
+.create-model-form,
+.edit-model-form .form-group {
     display: flex;
     flex-direction: column;
 }
 
-.create-model-form label {
+.create-model-form label,
+.edit-model-form label {
     margin-bottom: 0.5rem;
     font-weight: 500;
     font-size: 0.9rem;
 }
 
 .create-model-form input[type="number"],
-.create-model-form input[type="text"] {
+.create-model-form input[type="text"],
+.edit-model-form input[type="number"],
+.edit-model-form input[type="text"] {
     padding: 0.5rem;
     border: 1px solid #dee2e6;
     border-radius: 0.25rem;
@@ -34,26 +63,31 @@
 }
 
 .create-model-form input[type="number"]:focus,
-.create-model-form input[type="text"]:focus {
+.create-model-form input[type="text"]:focus,
+.edit-model-form input[type="number"]:focus,
+.edit-model-form input[type="text"]:focus {
     outline: none;
     border-color: #0d6efd;
     box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
 }
 
-.create-model-form fieldset {
+.create-model-form fieldset,
+.edit-model-form fieldset {
     border: 1px solid #dee2e6;
     border-radius: 0.25rem;
     padding: 1rem;
     margin: 0;
 }
 
-.create-model-form legend {
+.create-model-form legend,
+.edit-model-form legend {
     padding: 0 0.5rem;
     font-weight: 600;
     font-size: 0.9rem;
 }
 
-.create-model-form fieldset label {
+.create-model-form fieldset label,
+.edit-model-form fieldset label {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -61,11 +95,13 @@
     font-weight: normal;
 }
 
-.create-model-form fieldset label:last-child {
+.create-model-form fieldset label:last-child,
+.edit-model-form fieldset label:last-child {
     margin-bottom: 0;
 }
 
-.create-model-form input[type="checkbox"] {
+.create-model-form input[type="checkbox"],
+.edit-model-form input[type="checkbox"] {
     cursor: pointer;
 }
 
@@ -86,4 +122,26 @@
     background-color: #d4edda;
     color: #155724;
     border: 1px solid #c3e6cb;
+}
+
+.dialog-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    margin-top: 0.5rem;
+}
+
+.edit-model-dialog {
+    width: min(640px, 90vw);
+    border: none;
+    border-radius: 0.5rem;
+    padding: 0;
+}
+
+.edit-model-dialog::backdrop {
+    background-color: rgba(0, 0, 0, 0.4);
+}
+
+.edit-model-dialog .dialog-content {
+    padding: 1.5rem;
 }

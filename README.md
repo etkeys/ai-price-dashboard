@@ -78,8 +78,16 @@ Flask-Migrate.
 
 Protected actions use opaque API-key tokens instead of passwords. There are two roles:
 
-- **updater** — reserved for value updates on existing model rows; it cannot create models.
-- **administrator** — can create models, create and revoke API keys, plus everything an updater can do.
+- **updater** — value updates on existing model rows. May edit prices, context,
+  and modality lists. Cannot create or delete models.
+- **administrator** — everything an updater can do, plus creating and deleting
+  models, and managing API keys.
+
+Per D-007 (CONFIRMED), creating and deleting models is a structural,
+administrator-only action. Per D-012 (CONFIRMED), an updater may edit every
+other field on an existing model, including the modality lists, so that a
+scraper can sync an existing row with its upstream source. The model name is
+not editable by either role.
 
 ### Obtaining the first Administrator key
 
@@ -141,9 +149,13 @@ Authorization: Bearer ***
 ### Adding a model
 
 Administrators can add a model from the browser. Sign in with an Administrator
-API key using the **Authenticate** control in the header, then open **Add Model**
-from the navigation. All model attributes are required, including at least one
-input modality and one output modality.
+API key using the **Authenticate** control in the header, then open
+**Manage Models** from the navigation. The **Add AI Model** section is only
+shown to administrators; updaters see the existing-models table and the edit
+dialog only.
+
+All model attributes are required, including at least one input modality and
+one output modality.
 
 The equivalent HTTP request is:
 
@@ -164,6 +176,38 @@ curl -X POST \
 
 The endpoint returns `201` with the new model's ID and name. It is restricted to
 Administrators; updater keys receive `403 Forbidden`.
+
+### Editing a model
+
+Both updaters and administrators can edit every field of an existing model
+except its name. Open **Manage Models**, click **Edit** on any row, change
+prices, context, or modality lists, and submit. The modal submits a `PATCH`
+request and reloads the page on success.
+
+Modality lists are a **full replacement**: the submitted list replaces the
+existing associations for that side. The other side is left untouched when
+not submitted. Display on the public `/` page is alphabetical regardless of
+submission order.
+
+The equivalent HTTP request is:
+
+```bash
+curl -X PATCH \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "price_in": 0.95,
+    "context_tokens": 256000,
+    "input_content": ["Text", "Images"],
+    "output_content": ["Text"]
+  }' \
+  http://127.0.0.1:5000/admin/models/<model_id>
+```
+
+Any subset of `price_in`, `price_out`, `context_tokens`, `input_content`,
+and `output_content` may be sent; omitted fields are left unchanged.
+`name`, `id`, `created_at`, and `updated_at` are immutable and rejected with
+`400` if present in the body.
 
 ### Recovery
 
