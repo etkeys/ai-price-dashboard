@@ -47,8 +47,8 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 # Log
 
 ### D-014 — No optimistic concurrency control on model updates
-- Status: **ASSUMED** (offered to Erik as non-blocking; no ruling given)
-- Date raised: 2026-08-02   Date ruled: —
+- Status: **CONFIRMED**
+- Date raised: 2026-08-02   Date ruled: 2026-08-04
 - Source: `_research/2608021645_model-edit-implementation-plan.md` §A item 5;
   `_research/2608021650_model-edit-policy-decisions.md` §What I need from Erik, item 3
 - Card: t_d833f297 (implemented by t_1de70700)
@@ -61,6 +61,11 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
   update card is where this bites — if that card ships a contract without
   concurrency control, retrofitting becomes a breaking change for external
   callers rather than an internal edit. Raise it again on that card.
+- Ruling: **last write wins** is acceptable.
+- Rationale: While there could be multiple updaters attempting to updated the same
+  model at the same time, the chances are very, very low. And even if this sitautation
+  did occur, there isn't a good way conceptually to adjudicate which updater is correct.
+  This is just a limitation that we'll have to accept until it really becomes a problem.
 
 ### D-013 — May the model-edit card add `PATCH /admin/models/<id>`?
 - Status: **CONFIRMED** — resolved as option (a). Chip's recommendation was accepted.
