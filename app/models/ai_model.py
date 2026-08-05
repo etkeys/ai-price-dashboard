@@ -35,6 +35,7 @@ import datetime
 from typing import List
 
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
@@ -150,6 +151,23 @@ class AiModel(db.Model):
     def output_content(self) -> list[str]:
         """Output modalities as an ordered list of names."""
         return [m.name for m in self.output_modalities]
+
+    @hybrid_property
+    def sort_name(self) -> str:
+        """Display-order key with leading '~' prefixes ignored.
+
+        OpenRouter publishes aliases like ``~deepseek/deepseek-v4-flash-latest``;
+        the leading tilde must not exile such names to the end of a sorted
+        listing. ``lstrip`` (not ``removeprefix``) strips *every* leading tilde,
+        matching the SQL ``ltrim`` expression below.
+        """
+        return self.name.lstrip("~")
+
+    @sort_name.inplace.expression
+    @classmethod
+    def _sort_name_expression(cls):
+        """SQL expression mirroring :attr:`sort_name` for ``ORDER BY``."""
+        return func.ltrim(cls.name, "~")
 
     def __repr__(self) -> str:
         return f"<AiModel {self.name!r}>"

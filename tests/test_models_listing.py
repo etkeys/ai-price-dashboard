@@ -129,3 +129,65 @@ def test_seed_inserts_expected_count(seeded_client):  # noqa: ARG001
     with db.session.begin():
         count = db.session.scalar(select(func.count()).select_from(AiModel))
     assert count == len(SAMPLE_MODELS)
+
+
+TILDE_MODEL = "~deepseek/deepseek-v4-flash-latest"
+
+
+def _add_tilde_model(app) -> None:
+    """Insert the operator's real tilde-prefixed model into the seeded app."""
+    with app.app_context():
+        db.session.add(
+            AiModel(name=TILDE_MODEL, price_in=0.10, price_out=0.20, context_tokens=1_000_000)
+        )
+        db.session.commit()
+
+
+def _assert_tilde_sorts_among_siblings(html: str) -> None:
+    """Assert the tilde model renders between its deepseek siblings.
+
+    Uses string *positions* rather than membership: a membership check passes
+    under the old (un-sorted) behaviour, but a position comparison can only
+    hold if the tilde-prefixed name actually sorts adjacent to the others.
+    """
+    pos_flash = html.index("deepseek/deepseek-v4-flash")
+    pos_latest = html.index(TILDE_MODEL)
+    pos_pro = html.index("deepseek/deepseek-v4-pro")
+    assert pos_flash < pos_latest < pos_pro
+
+
+def test_index_page_sorts_tilde_model_among_siblings(seeded_app):
+    """'/' should place ~deepseek/...-latest between its deepseek siblings."""
+    _add_tilde_model(seeded_app)
+    response = seeded_app.test_client().get("/")
+    assert response.status_code == 200
+    _assert_tilde_sorts_among_siblings(response.data.decode())
+
+
+def test_admin_models_page_sorts_tilde_model_among_siblings(seeded_app):
+    """The admin manage page should order identically to '/'."""
+    _add_tilde_model(seeded_app)
+    response = seeded_app.test_client().get("/admin/models/manage")
+    assert response.status_code == 200
+    _assert_tilde_sorts_among_siblings(response.data.decode())
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # No tilde: no-op, keeps existing relative order.
+        ("deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-pro"),
+        # The operator's real case: one leading tilde is removed.
+        ("~deepseek/deepseek-v4-flash-latest", "deepseek/deepseek-v4-flash-latest"),
+        # Multiple leading tildes all fold (lstrip, not removeprefix).
+        ("~~qwen/qwen3.7-max", "qwen/qwen3.7-max"),
+        # Interior / trailing tilde is preserved (leading-only strip).
+        ("z-ai/glm-5.2-tilde~inside", "z-ai/glm-5.2-tilde~inside"),
+        # Degenerate: a name that is only tildes sorts to the top.
+        ("~", ""),
+        ("~~", ""),
+    ],
+)
+def test_sort_name_strips_only_leading_tildes(raw, expected):
+    """The sort_name sort key folds leading '~' but leaves the rest intact."""
+    assert AiModel(name=raw).sort_name == expected

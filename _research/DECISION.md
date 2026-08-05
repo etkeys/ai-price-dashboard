@@ -46,6 +46,95 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-018 — Name sort stays case-sensitive; no functional index; SQLite-only
+- Status: **ASSUMED**
+- Date raised: 2026-08-04   Date ruled: —
+- Source: `_research/2608042002_tilde-insensitive-name-sorting-plan.md` §A items 5, 6, 7
+- Card: t_185a7a47 (implemented by t_a7bbc3b7)
+- Three assumptions bundled because they share one cause — the sort expression
+  is SQLite's `ltrim(name, '~')` and nothing else about ordering changes:
+  1. **Case-sensitivity is untouched.** SQLite's binary collation sorts
+     `Zebra/x` before `anthropic/x`. That is the behaviour on `main` today; the
+     operator did not raise it and no seeded name has an uppercase leading
+     character. Same standing trap already recorded for modalities in D-010.
+  2. **No functional index.** `ORDER BY ltrim(name,'~')` cannot use the index on
+     `ai_models.name`; SQLite falls back to `USE TEMP B-TREE FOR ORDER BY`
+     (confirmed via `EXPLAIN QUERY PLAN`). Unmeasurable at 23 rows.
+  3. **SQLite is the only backend that must work.** `app/config.py:17` defaults
+     to `sqlite:///app.db` for every environment. Two-arg `ltrim(string, chars)`
+     is confirmed on SQLite 3.53.1 and identical on PostgreSQL; MySQL's `LTRIM`
+     takes one argument and would need `TRIM(LEADING '~' FROM name)`.
+- Reversal cost: (1) low but not free — `COLLATE NOCASE` or a `lower()` wrapper
+  changes ordering for any future mixed-case name and needs its own test; raise
+  as a separate card. (2) one additive Alembic revision if the table ever grows.
+  (3) one expression, and only on a MySQL port nothing suggests is coming.
+
+### D-017 — Sort key is defined once as an `AiModel.sort_name` hybrid property
+- Status: **ASSUMED**
+- Date raised: 2026-08-04   Date ruled: —
+- Source: `_research/2608042002_tilde-insensitive-name-sorting-plan.md` §3, §4a, §A item 4
+- Card: t_185a7a47 (implemented by t_a7bbc3b7)
+- Assumption in force: a `hybrid_property` named `sort_name` on `AiModel`
+  (Python `str.lstrip("~")`, SQL `func.ltrim(cls.name, "~")`) rather than
+  inlining `func.ltrim` at each `order_by` call site. One canonical definition
+  for the surfaces that exist plus the public REST index D-013 anticipates.
+  Inlining is an acceptable fallback if the property fights the type checker —
+  observable behaviour is identical.
+- Binding detail: **`str.lstrip("~")`, never `str.removeprefix("~")`.**
+  `removeprefix` strips one occurrence, so `~~qwen/...` would still sort under
+  `~`. Verified in `.venv`.
+- Also binding: **`ORDER BY sort_name, name`** — the raw `name` as secondary
+  term. Without it, `~deepseek/tie` vs `deepseek/tie` has no deterministic
+  order and no test can pin the pair.
+- Reversal cost: Trivial either way — one property, two `order_by` lines.
+
+### D-016 — Both listing surfaces share the ordering; no client-side sort exists
+- Status: **ASSUMED**
+- Date raised: 2026-08-04   Date ruled: —
+- Source: `_research/2608042002_tilde-insensitive-name-sorting-plan.md` §2, §A item 3
+- Card: t_185a7a47 (implemented by t_a7bbc3b7)
+- Assumption in force: the new ordering applies to **both** `app/routes/main.py:22`
+  (`/`) and `app/routes/admin.py:226` (`/admin/models/manage`). Two views of the
+  same data ordering differently is a bug; the operator would have to ask for
+  that explicitly.
+- Verified fact worth not rediscovering: **there is no JavaScript sort anywhere
+  in this repo.** Grep for `sort` across all JS returns zero hits. Both tables
+  are server-rendered and the edit dialog reloads the page
+  (`app/static/js/admin-models.js:112,200`) instead of re-ordering the DOM. Any
+  future card claiming the sort is "in the UI" is describing the route query.
+- Also out of scope, checked individually: the Jinja `| sort` on modality lists
+  (`app/templates/index.html:28-29`, `app/templates/admin/models.html:40-41` —
+  D-008/D-010), `sorted(ALLOWED_MODALITIES)` at `app/routes/admin.py:229`
+  (D-011), `sorted(...)[0]` error-message picks at `app/routes/admin.py:290,308,391`,
+  and the 16 `order_by(AiModel.name)` row-fetch helpers in
+  `tests/test_admin_models.py` — those must not need touching.
+- Reversal cost: Trivial — revert one line.
+
+### D-015 — Tilde-insensitive name sorting is presentation-only
+- Status: **ASSUMED**
+- Date raised: 2026-08-04   Date ruled: —
+- Source: `_research/2608042002_tilde-insensitive-name-sorting-plan.md` §3, §4e, §A items 1, 2
+- Card: t_185a7a47 (implemented by t_a7bbc3b7)
+- Question: OpenRouter's `~deepseek/deepseek-v4-flash-latest` must sort beside
+  its `deepseek/deepseek-*` siblings. Does the fix change the `ORDER BY`, or
+  does it normalise the stored name?
+- Assumption in force: **`ORDER BY` only.** Stored names keep their `~`
+  verbatim; nothing strips, normalises, or duplicates the name on write, and
+  `name` stays immutable for both roles per D-012. All leading tildes fold, not
+  just the first; interior and trailing `~` are untouched.
+- Rejected: normalising on write, or a second canonical-name column. Both
+  destroy or duplicate operator data to solve a display problem, and a schema
+  change of that kind would be a §B blocking question. Unnecessary — the
+  display-only fix satisfies the request completely.
+- Not a violation of `_research/2607251644_models-listing-spec.md:167` ("do NOT
+  re-sort in the route"), the line D-008 leaned on: the sort already lives in
+  the route's query. Changing the `ORDER BY` *expression* leaves ordering in the
+  database. The prohibition is on fetching rows then re-sorting in Python.
+- Reversal cost: None for the display behaviour — three source lines, no
+  migration, no schema change, no API contract change. Choosing write-time
+  normalisation later means a schema change plus a data migration, and becomes a
+  §B question at that time.
+
 ### D-014 — No optimistic concurrency control on model updates
 - Status: **CONFIRMED**
 - Date raised: 2026-08-02   Date ruled: 2026-08-04

@@ -223,7 +223,7 @@ def models_page():
             selectinload(AiModel.input_modalities),
             selectinload(AiModel.output_modalities),
         )
-        .order_by(AiModel.name)
+        .order_by(AiModel.sort_name, AiModel.name)
     ).all()
     return render_template(
         "admin/models.html", models=models, modalities=sorted(ALLOWED_MODALITIES)

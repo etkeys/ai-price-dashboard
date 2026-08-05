@@ -19,7 +19,7 @@ def index():
             selectinload(AiModel.input_modalities),
             selectinload(AiModel.output_modalities),
         )
-        .order_by(AiModel.name)
+        .order_by(AiModel.sort_name, AiModel.name)
     ).all()
     return render_template("index.html", models=models)
 
