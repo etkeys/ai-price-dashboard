@@ -64,6 +64,32 @@ class TestAiModelProperties:
             with pytest.raises(IntegrityError):
                 db.session.commit()
 
+    def test_is_hidden_reflects_hidden_at(self, app):
+        """is_hidden is False when hidden_at is None, True otherwise (D-020).
+
+        The hybrid is the canonical predicate; routes and templates must never
+        re-derive the hidden state from the raw column.
+        """
+        with app.app_context():
+            visible = AiModel(
+                name="vendor/visible",
+                price_in=1.0,
+                price_out=2.0,
+                context_tokens=100_000,
+            )
+            hidden = AiModel(
+                name="vendor/hidden",
+                price_in=1.0,
+                price_out=2.0,
+                context_tokens=100_000,
+                hidden_at=db.func.now(),
+            )
+            db.session.add_all([visible, hidden])
+            db.session.commit()
+
+            assert visible.is_hidden is False
+            assert hidden.is_hidden is True
+
 
 class TestSeedIdempotency:
     """Seeding must be safe to run repeatedly."""

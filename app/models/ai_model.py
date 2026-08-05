@@ -9,6 +9,7 @@ Schema:
         context_tokens    INTEGER NOT NULL, CHECK (context_tokens > 0)
         created_at        DATETIME NOT NULL, DEFAULT CURRENT_TIMESTAMP
         updated_at        DATETIME NOT NULL, DEFAULT CURRENT_TIMESTAMP
+        hidden_at         DATETIME NULL, DEFAULT NULL
 
     modalities
         id                INTEGER PK
@@ -117,6 +118,11 @@ class AiModel(db.Model):
         server_default=func.now(),
         onupdate=func.now(),
     )
+    hidden_at: Mapped[datetime.datetime | None] = mapped_column(
+        db.DateTime,
+        nullable=True,
+        default=None,
+    )
 
     # Relationships load eagerly via selectin to avoid N+1 on the listing page.
     input_modalities: Mapped[List[Modality]] = relationship(
@@ -168,6 +174,22 @@ class AiModel(db.Model):
     def _sort_name_expression(cls):
         """SQL expression mirroring :attr:`sort_name` for ``ORDER BY``."""
         return func.ltrim(cls.name, "~")
+
+    @hybrid_property
+    def is_hidden(self) -> bool:
+        """Whether the model is hidden from viewing surfaces.
+
+        ``None`` means visible; a non-``None`` ``hidden_at`` means hidden and
+        records when. The hybrid is the canonical predicate so routes and
+        templates never re-derive it.
+        """
+        return self.hidden_at is not None
+
+    @is_hidden.expression
+    @classmethod
+    def _is_hidden_expression(cls):
+        """SQL expression mirroring :attr:`is_hidden` for ``WHERE`` filtering."""
+        return cls.hidden_at.is_not(None)
 
     def __repr__(self) -> str:
         return f"<AiModel {self.name!r}>"

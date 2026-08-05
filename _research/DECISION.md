@@ -46,6 +46,182 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-024 — Hidden models still occupy the unique name index; only the 409 copy changes
+- Status: **ASSUMED**
+- Date raised: 2026-08-05   Date ruled: —
+- Source: `_research/2608050700_model-inactivation-implementation-plan.md` §5, §A item 5
+- Card: t_66c8528e (implemented by t_736da718)
+- Assumption in force: `ai_models.name` stays globally unique across hidden and
+  visible rows. Hiding `openai/gpt-6` and re-adding it therefore returns
+  **409**, from a dashboard that no longer shows the row. Confirmed by
+  execution. The fix is message copy only: the 409 in `create_model`
+  (`app/routes/admin.py:331-332`, and the `IntegrityError` branch at `:367-369`)
+  says the existing model is *hidden* and points at the manage page. Ships with
+  this work, not as a follow-up.
+- Rejected: a partial unique index scoped to visible rows. It would let a hidden
+  row and a visible row share a name, which makes unhiding ill-defined — there
+  is no rule for which row wins.
+- Reversal cost: **High, deliberately.** Scoping the index later is a schema
+  change plus a resolution rule for the duplicate-name collision it creates.
+  This assumption is the cheap side of that trade.
+
+### D-023 — Hiding never blocks an `updater` value sync; downgrade drops hidden state; no index
+- Status: **ASSUMED**
+- Date raised: 2026-08-05   Date ruled: —
+- Source: `_research/2608050700_model-inactivation-implementation-plan.md` §A items 6, 7, 8
+- Card: t_66c8528e (implemented by t_736da718)
+- Three assumptions bundled because none is separately contestable:
+  1. **`updater` may keep `PATCH`ing a hidden model.** Verified by execution:
+     price updates apply, `hidden_at` is preserved, the row stays hidden.
+     Follows directly from D-012's governing test — a scrape syncs an existing
+     row regardless of whether a human finds it interesting.
+  2. **The Alembic downgrade discards which models were hidden.** Standard for
+     an additive nullable column. Documented in the PR body rather than
+     engineered around; preserving it would mean an archive table.
+  3. **No index on `hidden_at`.** 22 rows, and `ORDER BY ltrim(name,'~')`
+     already forces a temp B-tree per D-018 item 2, so the scan is already the
+     plan.
+- Reversal cost: (1) low mechanically — one guard in the `PATCH` handler — but
+  it is a behaviour change deserving its own card, since it makes hiding partly
+  destructive of the scraper's job. (2) n/a. (3) one additive Alembic revision.
+
+### D-022 — Endpoint is `PUT /admin/models/<id>/hidden`, idempotent, not a `PATCH` field
+- Status: **ASSUMED**
+- Date raised: 2026-08-05   Date ruled: —
+- Source: `_research/2608050700_model-inactivation-implementation-plan.md` §3.3, §4d, §A item 3
+- Card: t_66c8528e (implemented by t_736da718)
+- Assumption in force: one new route, `PUT /admin/models/<int:model_id>/hidden`,
+  body `{"hidden": <bool>}`, response
+  `{"id", "name", "hidden", "hidden_at"}` with `Cache-Control: no-store`.
+  Idempotent: re-hiding an already-hidden model returns 200 and **preserves the
+  original `hidden_at`** — do not restamp. Strict `isinstance(x, bool)`
+  validation; `{"hidden": 1}` is a 400, because `1 == True` in Python makes
+  truthiness a real trap here.
+- **Binding: `hidden` must NOT be added to `_EDITABLE_FIELDS`.** Two reasons,
+  both proven by execution. Decisive: `PATCH` is gated at `updater` per D-012,
+  so folding `hidden` in silently grants the power to updaters and pre-empts
+  D-019 by accident. Secondary: `_validate_model_values(require_all=True)`
+  treats a missing field as fatal, so widening the tuple breaks
+  `POST /admin/models` for every existing client. The current
+  `400 Unknown model field` response to a `hidden` key is intended behaviour and
+  gets a regression test.
+- Rejected: `POST /hide` + `POST /unhide` — two verbs for one state.
+- Naming anticipates the public REST surface per D-013's binding consequence:
+  resource addressed by id, JSON in / JSON out, noun sub-resource not RPC verb.
+- Reversal cost: **Low but non-zero, and it grows.** Once the dashboard JS
+  speaks this contract, the deferred public REST card either adopts it or
+  versions around it — the same trap D-013 and D-014 both flagged.
+
+### D-021 — `/` filters hidden models; `/admin/models/manage` shows all of them, marked
+- Status: **ASSUMED**
+- Date raised: 2026-08-05   Date ruled: —
+- Source: `_research/2608050700_model-inactivation-implementation-plan.md` §3.4, §A items 2, 4
+- Card: t_66c8528e (implemented by t_736da718, t_266a1995)
+- Assumption in force: `app/routes/main.py` gains
+  `.where(AiModel.hidden_at.is_(None))`; `app/routes/admin.py:217-230` gains
+  **nothing** and keeps listing every row, with hidden ones visually marked by
+  text (not colour alone) plus `data-hidden` on the `<tr>`.
+- **This asymmetry is the mechanism, not an oversight.** The manage page is the
+  only place a hidden model can be found and unhidden; filtering it too would
+  make hiding a one-way door reachable only via `sqlite3`. Kova must treat
+  "the manage page still lists hidden models" as a required behaviour. It is a
+  deliberate exception to D-016's two-views-must-agree principle.
+- Verified: the `WHERE` keeps `/` at exactly **3 queries**, so
+  `tests/test_models_listing.py:76-92` passes untouched. Hiding every row
+  renders the existing `No models available.` empty state
+  (`app/templates/index.html:31-34`) — no work needed.
+- Also assumed: **no `?include_hidden=` parameter on `/` and no filter widget**
+  on the manage page. The manage page showing everything already satisfies the
+  child card's "optional filter" ask at 22 rows.
+- Reversal cost: trivial — one `where` clause. The query parameter is purely
+  additive later and would default to current behaviour, so it breaks nothing.
+
+### D-020 — Hidden state is a nullable `hidden_at DATETIME`, not an `is_active` boolean
+- Status: **ASSUMED**
+- Date raised: 2026-08-05   Date ruled: —
+- Source: `_research/2608050700_model-inactivation-implementation-plan.md` §3.1, §3.2, §4a, §A item 1
+- Card: t_66c8528e (implemented by t_736da718)
+- Question: the root card asks for hiding without deletion. What shape does the
+  state take — `is_active BOOLEAN`, `hidden_at` timestamp, `deleted_at`, or a
+  `status` enum?
+- Assumption in force: **one nullable `hidden_at DATETIME`** on `ai_models`.
+  `NULL` = visible. Plus an `is_hidden` hybrid property mirroring the existing
+  `sort_name` pattern (D-017), so the predicate is defined once.
+- Why, in order of weight: (1) it matches the convention already load-bearing in
+  this repo — `ApiKey.revoked_at`, `AuthSession.revoked_at`,
+  `RecoveryKey.consumed_at` (`app/models/auth.py:82,133,161`) are all
+  nullable-timestamp lifecycle flags, and `_key_status()` already derives a
+  status string from them; a boolean would be the only lifecycle flag shaped
+  differently from its three siblings. (2) "when did this stop being
+  interesting?" is free with a timestamp and unrecoverable with a boolean, and
+  the operator's phrasing was temporal. (3) a nullable column is a pure
+  `ALTER TABLE ADD COLUMN`; a `NOT NULL DEFAULT 1` boolean means a table rebuild
+  under SQLite `batch_alter_table` with a server default that lingers.
+- Rejected: `deleted_at` — a category error. Soft-delete means "gone, retained
+  for audit"; the operator wants "still here, might come back". The name would
+  mislead every future reader and invite a purge job over live rows. Also
+  rejected: a `status` enum, which invents states nobody asked for (cf. D-001),
+  and a `hidden_models` join table, which normalises a 22-row table for nothing.
+- **Filed as ASSUMED rather than §B because the API contract is
+  `{"hidden": <bool>}` either way** (D-022), so the storage shape is genuinely
+  internal and does not leak to any client.
+- Migration: one autogenerated Alembic revision,
+  `down_revision = '248f2949289c'`, `batch_alter_table` add/drop of the column.
+  No backfill — existing rows get `NULL` = visible, so the migration is
+  behaviour-preserving on its own. Upgrade→downgrade→upgrade round-trip verified
+  on a populated 22-row database with `ix_ai_models_name` intact.
+- Reversal cost: **Low.** One additive Alembic revision plus a backfill
+  (`is_active = (hidden_at IS NULL)`), the hybrid property's definition, and
+  nothing else. No endpoint contract change, no client change, no test rewrite
+  beyond the model unit test. Costed knowing it would run against a live DB.
+
+### D-019 — May an `updater` hide/unhide a model, or is it administrator-only?
+- Status: **CONFIRMED**
+- Date raised: 2026-08-05   Date ruled: 2026-08-05
+- Source: `_research/2608050702_model-hide-gating-decision.md` §1
+- Card: t_66c8528e (blocks t_736da718, t_266a1995, t_51953389; root t_3c65170f)
+- Question: what role gates `PUT /admin/models/<int:model_id>/hidden`? The two
+  confirmed precedents point opposite ways. D-007 reserves **row lifecycle** for
+  `administrator`, and hiding is the nearest thing this app has to deletion —
+  the operator asked for it *instead of* deletion. D-012's governing test asks
+  "does this operation sync an existing row with its upstream source?", and
+  hiding changes no row's existence, leaves the name unique, and leaves the row
+  `PATCH`-able. A retired-upstream-model scraper story reads naturally under
+  either reading.
+- Options: (a) administrator only. (b) updater and administrator —
+  `@require_role(ROLE_UPDATER)` admits both by rank. (c) updater may hide,
+  administrator only may unhide.
+- Chip recommends: **(a)**. Hiding is the deletion this app deliberately does
+  not have; narrowing later is a 403 contract break for a client that previously
+  got 200, whereas widening later costs one decorator argument; and the scraper
+  story is speculative — no scraper exists yet (D-007 records that `updater`
+  today can only call `DELETE /auth/session`). Given genuine ambiguity about
+  intent, take the reversible side. **(c) is recommended against**: it needs
+  in-handler branching on the request body, which is exactly the per-field
+  gating D-012 explicitly ruled out.
+- Why this is §B and not an §A assumption: it changes the role/permission model,
+  it is a 403-vs-200 API contract difference for an entire role, and it fixes
+  the shape of a test that will be pinned as intended behaviour. It is also the
+  precise question AGENTS.md §2 cites as precedent — an
+  `updater`-vs-`administrator` gating question was filed as non-blocking once,
+  code shipped on the assumption, and it resurfaced a day later.
+- Ruling: **(a) administrator only.** Erik: *"An updater may not hide models.
+  Only administrators can do this."*
+- Rationale: Erik's ruling was the bare answer; the generalizable reading is that
+  D-007's row-lifecycle line governs, and it is read **broadly** — an operation
+  does not have to add or remove a row to be a lifecycle decision. What matters
+  is whether the operation states an intent about *whether a model belongs on the
+  dashboard*. That is a human curation call, so `administrator`. D-012's
+  "sync an existing row with its upstream source" test is therefore narrower than
+  its literal wording suggests: it admits `updater` for **value** writes on a row
+  whose place in the collection is already settled, not for writes that decide
+  that placement. Standing rule for the next model endpoint: **if the operation
+  answers "should this model be here at all?", it is `administrator`; if it
+  answers "what are this model's current values?", it is `updater`.**
+- Reversal cost: asymmetric, and that asymmetry is the argument. (a)→(b) is one
+  decorator argument and one test edit, no client breakage. (b)→(a) is a 403 for
+  any updater client already hiding models. We are on the reversible side.
+
 ### D-018 — Name sort stays case-sensitive; no functional index; SQLite-only
 - Status: **ASSUMED**
 - Date raised: 2026-08-04   Date ruled: —

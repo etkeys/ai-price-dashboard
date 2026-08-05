@@ -732,3 +732,235 @@ class TestUpdateModel:
             )
         assert resp.status_code == 200
         assert resp.headers.get("Cache-Control") == "no-store"
+
+
+class TestSetModelHidden:
+    """PUT /admin/models/<id>/hidden endpoint tests (D-019..D-024).
+
+    Binding constraints:
+      - Gate: `@require_role(ROLE_ADMINISTRATOR)`, administrator-only (D-019).
+        An updater calling this endpoint gets 403.
+      - Body must contain a strict `hidden` boolean; `1` / `"yes"` / `null` and
+        a missing key all return 400 (never Python truthiness).
+      - Idempotent: re-hiding preserves the original `hidden_at`, unhiding a
+        visible model keeps it NULL. The first hide is the meaningful timestamp.
+      - Unknown id → 404.
+      - `hidden` must NOT be a `PATCH` field: `{"hidden": true}` on PATCH → 400
+        `Unknown model field` (D-022 regression guard).
+      - Hidden rows keep the unique name; POST re-adding a hidden name → 409
+        with the hidden-specific copy (D-024).
+    """
+
+    def _pick_model(self, seeded_app):
+        from sqlalchemy import select
+        from app.extensions import db
+        with seeded_app.app_context():
+            return db.session.scalar(select(AiModel).order_by(AiModel.name))
+
+    def test_unauthenticated_returns_401(self, seeded_app):
+        """PUT .../hidden without auth returns 401."""
+        model = self._pick_model(seeded_app)
+        resp = seeded_app.test_client().put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": True}
+        )
+        assert resp.status_code == 401
+
+    def test_updater_returns_403_and_leaves_row_unchanged(self, seeded_app):
+        """An updater gets 403 and the row's hidden_at is NOT changed (D-019).
+
+        This is the test that pins the permission model: assert both the status
+        and that the dismissal was a no-op, not a weakened smoke test.
+        """
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="updater", role=ROLE_UPDATER)
+        resp = seeded_app.test_client().put(
+            f"/admin/models/{model.id}/hidden",
+            json={"hidden": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is None
+
+    def test_administrator_hide_returns_200(self, seeded_app):
+        """Hide as admin → 200 with hidden:true and a non-null hidden_at."""
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        resp = seeded_app.test_client().put(
+            f"/admin/models/{model.id}/hidden",
+            json={"hidden": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json
+        assert data["id"] == model.id
+        assert data["hidden"] is True
+        assert data["hidden_at"] is not None
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is not None
+        assert resp.headers.get("Cache-Control") == "no-store"
+
+    def test_rehide_preserves_original_hidden_at(self, seeded_app):
+        """Re-hiding an already-hidden model keeps the original hidden_at."""
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        client = seeded_app.test_client()
+        hdr = {"Authorization": f"Bearer {token}"}
+        first = client.put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": True}, headers=hdr
+        )
+        assert first.status_code == 200
+        first_hidden_at = first.json["hidden_at"]
+        second = client.put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": True}, headers=hdr
+        )
+        assert second.status_code == 200
+        assert second.json["hidden_at"] == first_hidden_at
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is not None
+            assert refreshed.hidden_at.isoformat() == first_hidden_at
+
+    def test_unhide_returns_visible_with_null_hidden_at(self, seeded_app):
+        """Unhide → 200, hidden:false, hidden_at null in the DB."""
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        client = seeded_app.test_client()
+        hdr = {"Authorization": f"Bearer {token}"}
+        assert client.put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": True}, headers=hdr
+        ).status_code == 200
+        resp = client.put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": False}, headers=hdr
+        )
+        assert resp.status_code == 200
+        assert resp.json["hidden"] is False
+        assert resp.json["hidden_at"] is None
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {},
+            {"hidden": "yes"},
+            {"hidden": 1},
+            {"hidden": None},
+        ],
+    )
+    def test_invalid_body_returns_400(self, seeded_app, body):
+        """Invalid/missing `hidden` values return 400 (strict bool validation)."""
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        resp = seeded_app.test_client().put(
+            f"/admin/models/{model.id}/hidden",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400, body
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is None
+
+    def test_unknown_id_returns_404(self, seeded_app):
+        """PUT .../hidden against a non-existent id returns 404."""
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        resp = seeded_app.test_client().put(
+            "/admin/models/9999999/hidden",
+            json={"hidden": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+        assert "not found" in resp.json["error"].lower()
+
+    def test_patch_hidden_field_returns_400(self, seeded_app):
+        """PATCH with `{"hidden": true}` → 400 Unknown model field (D-022).
+
+        Regression guard for the rejected option of folding `hidden` into
+        PATCH: it must NOT silently grant the hide power to updaters.
+        """
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        resp = seeded_app.test_client().patch(
+            f"/admin/models/{model.id}",
+            json={"hidden": True},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400
+        assert "Unknown model field" in resp.json["error"]
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.hidden_at is None
+
+    def test_updater_patch_keeps_hidden_state(self, seeded_app):
+        """An updater may still PATCH a hidden model; it stays hidden (D-023).
+
+        Scrapers keep syncing hidden rows; hiding must never block a value sync.
+        """
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, admin_token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+            _, updater_token = create_api_key(name="updater", role=ROLE_UPDATER)
+        client = seeded_app.test_client()
+        hide = client.put(
+            f"/admin/models/{model.id}/hidden",
+            json={"hidden": True},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert hide.status_code == 200
+        hidden_at = hide.json["hidden_at"]
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"price_in": 0.42},
+            headers={"Authorization": f"Bearer {updater_token}"},
+        )
+        assert resp.status_code == 200
+        with seeded_app.app_context():
+            from app.extensions import db
+            refreshed = db.session.get(AiModel, model.id)
+            assert refreshed.price_in == 0.42
+            assert refreshed.hidden_at is not None
+            assert refreshed.hidden_at.isoformat() == hidden_at
+
+    def test_post_reusing_hidden_name_returns_hidden_409(self, seeded_app):
+        """POST a hidden model's name → 409 with the hidden-specific copy (D-024)."""
+        model = self._pick_model(seeded_app)
+        name = model.name
+        with seeded_app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        client = seeded_app.test_client()
+        hdr = {"Authorization": f"Bearer {token}"}
+        assert client.put(
+            f"/admin/models/{model.id}/hidden", json={"hidden": True}, headers=hdr
+        ).status_code == 200
+        resp = client.post(
+            "/admin/models",
+            json={
+                "name": name,
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "context_tokens": 1000,
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=hdr,
+        )
+        assert resp.status_code == 409
+        assert "hidden model named" in resp.json["error"]
+        assert "Unhide it from the manage page" in resp.json["error"]
