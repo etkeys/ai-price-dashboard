@@ -23,6 +23,53 @@ document.addEventListener('DOMContentLoaded', () => {
     createSection.hidden = false;
   }
 
+  // ----- Hide/Unhide toggle (administrator-only, D-019) -----
+  // The server is the real authority; this client-side gate is cosmetic.
+  // Buttons are rendered hidden and revealed only for administrators, matching
+  // the create-section pattern above. Hide never blocks an updater value sync
+  // (D-023), so the edit control stays visible on hidden rows for both roles.
+  const toggleMessage = document.getElementById('toggle-models-message');
+  const showToggleMessage = (text, isSuccess = false) => {
+    if (!toggleMessage) return;
+    toggleMessage.textContent = text;
+    toggleMessage.className = isSuccess ? 'message-box success-message' : 'message-box error-message';
+    toggleMessage.hidden = false;
+  };
+
+  document.querySelectorAll('.js-toggle-hidden').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const row = button.closest('tr[data-model-id]');
+      if (!row) return;
+      const modelId = row.dataset.modelId;
+      const current = row.dataset.hidden === 'true';
+      const nextHidden = !current;
+      const label = nextHidden ? 'hidden' : 'visible';
+
+      if (toggleMessage) toggleMessage.hidden = true;
+
+      const response = await authFetch(`/admin/models/${modelId}/hidden`, {
+        method: 'PUT',
+        body: { hidden: nextHidden },
+      });
+
+      if (response.ok) {
+        // Reload to reflect the new hidden state server-side. The page's
+        // established write idiom is a full reload (D-016: no client-side
+        // view state anywhere in this repo), so we do not mutate the row.
+        window.location.reload();
+      } else {
+        const data = await response.json().catch(() => ({}));
+        showToggleMessage(data.error || `Failed to mark model ${label}.`);
+      }
+    });
+  });
+
+  if (typeof isAdministrator === 'function' && isAdministrator()) {
+    document.querySelectorAll('.js-toggle-hidden').forEach((button) => {
+      button.hidden = false;
+    });
+  }
+
   /**
    * Get checked modality values for a fieldset by its checkbox name.
    * @param {string} fieldName

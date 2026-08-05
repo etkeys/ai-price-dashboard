@@ -32,6 +32,12 @@
     font-family: monospace;
 }
 
+/* Hidden models: muted text, still legible (not colour-only — the Status
+   column carries the "Hidden"/"Visible" text for accessibility). */
+.models-table tr.row-hidden td {
+    color: #6c757d;
+}
+
 .create-model-section,
 .edit-model-form {
     display: flex;
