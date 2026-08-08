@@ -45,7 +45,7 @@ A Flask application for tracking and displaying AI-related prices.
   - `extensions.py` — Flask extension instances (db, migrate)
   - `models/` — SQLAlchemy model definitions
   - `commands.py` — Custom Flask CLI commands (e.g. `flask seed`)
-  - `routes/` — Flask blueprints
+  - `routes/` — Flask blueprints (`main`, `auth`, `admin`, `api`)
   - `templates/` — Jinja2 templates
   - `static/` — CSS/JS assets
   - `utils/` — Helper functions
@@ -73,6 +73,41 @@ Flask-Migrate.
 - **Re-seeding:** `flask seed --force` deletes existing model rows and re-seeds
   from `SAMPLE_MODELS`. This is intended for development only and is not run by
   the container entrypoint.
+
+## Public API
+
+`/api/v1/` is the public, agent-facing REST API. Some of its endpoints require
+authentication and some do not; the table below is authoritative, and any
+endpoint that requires a token returns `401` with a `WWW-Authenticate: Bearer`
+header when called without one.
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/v1/modalities` | None | Modality vocabulary assignable to a model |
+
+The `GET /api/v1/modalities` endpoint is unauthenticated and returns the full
+set of modality names the model write paths accept:
+
+```bash
+curl http://127.0.0.1:5000/api/v1/modalities
+```
+
+```json
+{
+  "modalities": [
+    {"name": "Audio"},
+    {"name": "Files"},
+    {"name": "Images"},
+    {"name": "Text"},
+    {"name": "Videos"}
+  ]
+}
+```
+
+The returned `name` values are the exact tokens to send in `input_content` /
+`output_content` when creating or editing a model (see below). Responses are
+cacheable for five minutes and CORS-open so agent and browser clients can poll
+freely.
 
 ## Authentication
 
