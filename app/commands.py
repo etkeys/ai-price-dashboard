@@ -10,6 +10,7 @@ from datetime import datetime as _datetime
 import click
 from sqlalchemy import func, select
 
+from app.data.modalities import ALLOWED_MODALITIES
 from app.data.sample_models import SAMPLE_MODELS
 from app.extensions import db
 from app.models import (
@@ -32,9 +33,6 @@ from app.services.auth_service import (
     generate_token,
     revoke_api_key,
 )
-
-
-ALLOWED_MODALITIES = ["Text", "Images", "Files", "Videos", "Audio"]
 
 
 def register_commands(app):
