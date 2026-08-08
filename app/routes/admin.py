@@ -41,6 +41,23 @@ def _admin_error(status: int, message: str) -> Response:
     return response
 
 
+def _name_conflict_message(name: str) -> str:
+    """409 message for a name that already exists, hidden-aware (D-024).
+
+    Hidden rows still occupy the unique index on ``ai_models.name``, so
+    re-adding a hidden model's name 409s from a dashboard that does not show it.
+    When the colliding row is hidden, say so and point at the manage page —
+    the only surface where it can be unhidden.
+    """
+    existing = db.session.scalar(select(AiModel).where(AiModel.name == name))
+    if existing is not None and existing.hidden_at is not None:
+        return (
+            f"A hidden model named '{name}' already exists. "
+            "Unhide it from the manage page."
+        )
+    return f"A model named '{name}' already exists"
+
+
 @admin_bp.route("/keys/manage", methods=["GET"])
 def keys_page():
     """Render the key management page (public shell; data is protected via @require_role)."""
@@ -329,7 +346,7 @@ def create_model():
 
     # Check uniqueness and fetch modality rows.
     if db.session.scalar(select(AiModel).where(AiModel.name == name)) is not None:
-        return _admin_error(409, f"A model named '{name}' already exists")
+        return _admin_error(409, _name_conflict_message(name))
 
     modality_rows, error = _modality_rows(content)
     if error is not None:
@@ -366,7 +383,7 @@ def create_model():
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
-        return _admin_error(409, f"A model named '{name}' already exists")
+        return _admin_error(409, _name_conflict_message(name))
 
     response = make_response(jsonify({"id": model.id, "name": model.name}), 201)
     response.headers["Cache-Control"] = "no-store"
@@ -436,5 +453,52 @@ def update_model(model_id: int):
         return _admin_error(400, "Unable to update model")
 
     response = make_response(jsonify({"id": model.id, "name": model.name}), 200)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@admin_bp.route("/models/<int:model_id>/hidden", methods=["PUT"])
+@require_role(ROLE_ADMINISTRATOR)
+def set_model_hidden(model_id: int):
+    """Set whether a model is hidden from viewing surfaces (D-019, administrator-only).
+
+    ``PUT`` is a single idempotent state-setter over ``POST /hide`` +
+    ``POST /unhide``. Re-hiding an already-hidden model is a 200 no-op that
+    **preserves the original ``hidden_at``** — the first hide is the meaningful
+    timestamp; it is never restamped. ``hidden`` must be a strict boolean:
+    ``1``, ``"yes"``, ``null`` and a missing key all return 400 (never trust
+    Python truthiness, since ``1 == True``).
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or "hidden" not in data:
+        return _admin_error(
+            400, "A JSON object with a 'hidden' boolean is required"
+        )
+    hidden = data["hidden"]
+    if not isinstance(hidden, bool):
+        return _admin_error(400, "'hidden' must be a boolean")
+
+    model = db.session.get(AiModel, model_id)
+    if model is None:
+        return _admin_error(404, "Model not found")
+
+    if hidden:
+        if model.hidden_at is None:
+            model.hidden_at = _utcnow()
+    else:
+        model.hidden_at = None
+    db.session.commit()
+
+    response = make_response(
+        jsonify(
+            {
+                "id": model.id,
+                "name": model.name,
+                "hidden": model.hidden_at is not None,
+                "hidden_at": model.hidden_at.isoformat() if model.hidden_at else None,
+            }
+        ),
+        200,
+    )
     response.headers["Cache-Control"] = "no-store"
     return response

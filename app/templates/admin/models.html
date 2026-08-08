@@ -10,6 +10,8 @@
         Creating and deleting models remains administrator-only.
     </p>
 
+    <div id="toggle-models-message" class="message-box" role="alert" hidden></div>
+
     <table id="models-table" class="models-table">
         <thead>
             <tr>
@@ -19,6 +21,7 @@
                 <th>Context</th>
                 <th>Input</th>
                 <th>Output</th>
+                <th>Status</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -32,6 +35,8 @@
                 data-context-tokens="{{ model.context_tokens }}"
                 data-input-content="{{ model.input_content | join(',') }}"
                 data-output-content="{{ model.output_content | join(',') }}"
+                data-hidden="{{ 'true' if model.is_hidden else 'false' }}"
+                {% if model.is_hidden %}class="row-hidden"{% endif %}
             >
                 <td class="cell-model-name">{{ model.name }}</td>
                 <td>{{ model.price_in }}</td>
@@ -39,8 +44,13 @@
                 <td>{{ model.context_tokens }}</td>
                 <td>{{ model.input_content | sort | join(', ') }}</td>
                 <td>{{ model.output_content | sort | join(', ') }}</td>
+                <td>{{ 'Hidden' if model.is_hidden else 'Visible' }}</td>
                 <td>
                     <button type="button" class="btn btn-secondary js-edit-model">Edit</button>
+                    <button type="button" class="btn btn-secondary js-toggle-hidden"
+                            {% if model.is_hidden %}data-want-unhide="1"{% endif %} hidden>
+                        {%- if model.is_hidden -%}Unhide{%- else -%}Hide{%- endif -%}
+                    </button>
                 </td>
             </tr>
             {% endfor %}

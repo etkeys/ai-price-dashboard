@@ -191,3 +191,64 @@ def test_admin_models_page_sorts_tilde_model_among_siblings(seeded_app):
 def test_sort_name_strips_only_leading_tildes(raw, expected):
     """The sort_name sort key folds leading '~' but leaves the rest intact."""
     assert AiModel(name=raw).sort_name == expected
+
+
+def _hide_model(app, name: str) -> None:
+    """Persist hidden_at on the row(s) named ``name``."""
+    with app.app_context():
+        rows = db.session.scalars(select(AiModel).where(AiModel.name == name)).all()
+        for row in rows:
+            row.hidden_at = db.func.now()
+        db.session.commit()
+
+
+def _pick_visible_names(app, count: int) -> list[str]:
+    """Return ``count`` distinct model names that are present and visible on '/'."""
+    with app.app_context():
+        rows = db.session.scalars(select(AiModel).order_by(AiModel.name)).all()
+        assert len(rows) >= count
+        return [r.name for r in rows[:count]]
+
+
+def test_index_page_excludes_hidden_model(seeded_app):
+    """A hidden model is absent from '/' while a visible sibling is present (D-021).
+
+    The positive sibling assertion guards against a broken template making the
+    absence assertion pass vacuously.
+    """
+    hidden_name, sibling = _pick_visible_names(seeded_app, 2)
+    _hide_model(seeded_app, hidden_name)
+
+    response = seeded_app.test_client().get("/")
+    assert response.status_code == 200
+    html = response.data.decode()
+    assert hidden_name not in html
+    assert sibling in html
+
+
+def test_admin_manage_page_lists_hidden_model(seeded_app):
+    """/admin/models/manage still lists hidden models (D-021).
+
+    The manage page is the only way back from hidden; filtering it would make
+    hiding a one-way door. This test stops a future refactor from 'helpfully'
+    filtering it.
+    """
+    hidden_name = _pick_visible_names(seeded_app, 1)[0]
+    _hide_model(seeded_app, hidden_name)
+
+    response = seeded_app.test_client().get("/admin/models/manage")
+    assert response.status_code == 200
+    assert hidden_name in response.data.decode()
+
+
+def test_index_page_all_hidden_renders_empty_state(seeded_app):
+    """Hiding every model renders the existing 'No models available.' state."""
+    with seeded_app.app_context():
+        rows = db.session.scalars(select(AiModel)).all()
+        for row in rows:
+            row.hidden_at = db.func.now()
+        db.session.commit()
+
+    response = seeded_app.test_client().get("/")
+    assert response.status_code == 200
+    assert "No models available." in response.data.decode()

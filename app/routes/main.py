@@ -15,6 +15,7 @@ def index():
     """Render the dashboard home page from the persisted model list."""
     models = db.session.scalars(
         select(AiModel)
+        .where(AiModel.hidden_at.is_(None))
         .options(
             selectinload(AiModel.input_modalities),
             selectinload(AiModel.output_modalities),
