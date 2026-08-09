@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import require_role
 from app.auth.decorators import get_principal
+from app.data.modalities import ALLOWED_MODALITIES as _ALLOWED_MODALITIES
 from app.extensions import db
 from app.models import AiModel, AiModelInputModality, AiModelOutputModality, Modality
 from app.models.auth import ROLE_ADMINISTRATOR, ApiKey, AuthEvent, AuthSession
@@ -21,7 +22,7 @@ from app.services.auth_service import (
 
 admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
-ALLOWED_MODALITIES = frozenset({"Text", "Images", "Files", "Videos", "Audio"})
+ALLOWED_MODALITIES = frozenset(_ALLOWED_MODALITIES)
 
 _EDITABLE_FIELDS = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
 

@@ -47,10 +47,12 @@ def create_app(config_name: str = "default") -> Flask:
     # Register blueprints.
     from app.auth import auth_bp
     from app.routes.admin import admin_bp
+    from app.routes.api import api_bp
     from app.routes.main import main_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(api_bp)
     app.register_blueprint(admin_bp)
 
     return app

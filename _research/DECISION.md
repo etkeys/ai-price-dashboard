@@ -46,6 +46,155 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-029 — An empty modality vocabulary is `200` + empty array, not an error
+- Status: **ASSUMED**
+- Date raised: 2026-08-08   Date ruled: —
+- Source: `_research/2608081520_public-modalities-endpoint-spec.md` §7 case 1, §A item 5
+- Card: t_4ce58bc1 (implements in t_8e6dd729)
+- Assumption in force: `GET /api/v1/modalities` against a migrated-but-unseeded
+  database returns `200` with `{"modalities": []}`. Not `404`, not `503`.
+- **Reachable, not theoretical.** Verified by execution: a fresh `db.create_all()`
+  leaves `modalities` empty until `seed_database()` runs `_upsert_modalities()`
+  (`app/commands.py:123-133`). The bare `client` fixture
+  (`tests/conftest.py:22-25`) is exactly this state, so the case costs no new
+  fixture to test.
+- Reasoning: the collection resource exists and is empty. A `404` would say
+  "no such endpoint" and send a client hunting for the wrong URL.
+- Reversal cost: trivial mechanically, but it becomes a contract change once
+  pinned by a test. Change it on its own card, not in passing.
+
+### D-028 — Public read is cacheable and CORS-open; scoped to one route, no `flask-cors`
+- Status: **ASSUMED**
+- Date raised: 2026-08-08   Date ruled: —
+- Source: `_research/2608081520_public-modalities-endpoint-spec.md` §6, §A item 4
+- Card: t_4ce58bc1 (implements in t_8e6dd729)
+- Assumption in force: the modalities response carries
+  `Cache-Control: public, max-age=300` and `Access-Control-Allow-Origin: *`,
+  both hand-written on that one response. **No `flask-cors` dependency** — a
+  production dependency for a single static header is not justified.
+- **This is a deliberate departure from `no-store`, and the departure is the
+  point.** Every authenticated response in this app sets `Cache-Control:
+  no-store` (`app/routes/admin.py:40,93,155`, `app/auth/decorators.py:70`)
+  because it is per-principal. This one is a five-element constant that changes
+  only by code change. Cache semantics thereby become a corroborating tell for
+  which side of the auth boundary a response is on.
+- **Binding: the CORS header must NOT be applied app-wide**, via `after_request`
+  or otherwise, and must not reach any `/admin/*` or `/auth/*` route. An
+  app-wide hook is the plausible-looking wrong implementation and it would open
+  the authenticated surface. A regression test asserting `/admin/*` still has
+  `no-store` and **no** `Access-Control-Allow-Origin` is required, not optional.
+- Safety: no credentials are exposed. `Access-Control-Allow-Credentials` is not
+  set and `*` is incompatible with it by spec; auth is a bearer token in
+  `sessionStorage`, not a cookie, so there is no ambient credential to ride on.
+  `GET`-only, so no preflight and no `OPTIONS` handler.
+- Reversal cost: nil — delete a header or lower `max-age`. Adopting `flask-cors`
+  later stays open if a real browser client with non-trivial CORS needs appears.
+
+### D-027 — One canonical `ALLOWED_MODALITIES`; the endpoint serves table ∩ allow-list
+- Status: **ASSUMED**
+- Date raised: 2026-08-08   Date ruled: —
+- Source: `_research/2608081520_public-modalities-endpoint-spec.md` §2, §3, §A item 3
+- Card: t_4ce58bc1 (implements in t_8e6dd729)
+- Question: the assignable vocabulary is defined in three places —
+  `app/commands.py:37` (list, seed source), `app/routes/admin.py:24`
+  (frozenset, write validation) and the `modalities` table. Which one does a
+  discovery endpoint publish?
+- Assumption in force: **neither alone — the intersection.** A name is assignable
+  only if it passes `issubset(ALLOWED_MODALITIES)` (`app/routes/admin.py:306`)
+  *and* resolves to a table row (`app/routes/admin.py:318-322`). Publishing
+  either source alone advertises names the write path then rejects with a 400.
+  Query: `SELECT id, name FROM modalities WHERE name IN (<allow-list>) ORDER BY name`.
+- Also in force: collapse the duplicate constants into `app/data/modalities.py`
+  as a **tuple in seed order** (`Text, Images, Files, Videos, Audio`), imported
+  by both call sites. Order is preserved deliberately — it determines seed
+  insertion order and therefore existing row ids. `app/routes/admin.py` keeps
+  its module-level `ALLOWED_MODALITIES` name and `frozenset` type so `.issubset`,
+  the set difference and `sorted(...)` are untouched and no existing test moves.
+- **Divergence is not hypothetical in one direction:** `_upsert_modalities()`
+  inserts but never deletes, so retiring a name from the constant leaves an
+  orphan row in every existing database. The endpoint must not advertise it.
+- `tests/test_models_listing.py:12`'s independent copy of the five values stays.
+  A test asserting against the constant it is checking would be vacuous.
+- Standing trap, inherited from D-010: the SQL `ORDER BY name` is correct only
+  because all five names are capitalised single-case. A lowercase name would
+  need `COLLATE NOCASE` here *and* at `app/templates/index.html:28-29`.
+- Reversal cost: trivial — the constant can move again; both call sites keep
+  their existing names and types, so nothing downstream is coupled to its home.
+
+### D-026 — The public modality object exposes `name` only; no `id`
+- Status: **ASSUMED**
+- Date raised: 2026-08-08   Date ruled: —
+- Source: `_research/2608081520_public-modalities-endpoint-spec.md` §5, §A item 2
+- Card: t_4ce58bc1 (implements in t_8e6dd729)
+- Question: card t_4ce58bc1 asks for "modality objects with id and name". Should
+  the surrogate key be published?
+- Assumption in force: **no `id`.** Response is
+  `{"modalities": [{"name": "Audio"}, ...]}`. This deliberately overrides the
+  card body's literal wording.
+- Why, in order of weight: (1) **the ids are not stable.** Verified by execution
+  — seeding assigns `Text=1, Images=2, Files=3, Videos=4, Audio=5` from the list
+  literal's insertion order at `app/commands.py:37`, not alphabetically. Two
+  databases seeded from different revisions can disagree. Publishing an
+  identifier in a discovery endpoint promises it means the same thing tomorrow
+  and on the next host; we cannot keep that promise. (2) **Nothing accepts an
+  id** — every write path addresses modalities by name. Returning an id invites
+  a client to submit it, which 400s. (3) it is an internal surrogate key with no
+  consumer that we would then have to keep working.
+- Objects rather than bare strings (`[{"name": "Audio"}]` not `["Audio"]`): nine
+  characters per element buys an additive field later — a display label, a
+  deprecation flag — without a `v2`.
+- Envelope `{"modalities": [...]}` rather than a bare array, matching
+  `GET /admin/keys` → `{"keys": [...]}` (`app/routes/admin.py:92`).
+- Reversal cost: **asymmetric, and we are on the reversible side.** Adding `id`
+  later is purely additive and breaks no client. Removing it after publication
+  would be breaking.
+
+### D-025 — `/api/v1/` is the public API prefix; it denotes audience, not auth class
+- Status: **ASSUMED**
+- Date raised: 2026-08-08   Date ruled: —
+- Source: `_research/2608081520_public-modalities-endpoint-spec.md` §4, §A item 1
+- Card: t_4ce58bc1 (implements in t_8e6dd729; root t_18fefad3)
+- Question: Erik on the root card — *"it may be awkward to have some REST
+  endpoints that do not require authentication and some that do and how would
+  you sign post the difference. Do what provides the better user experience."*
+- Rejected: **prefix by auth class** ("everything under `/api` is public").
+  Accidentally true of the app today, and guaranteed false the moment the public
+  *write* API lands — which D-013's CONFIRMED rationale tells us is a known,
+  expected use case. A signpost that turns into a lie is worse than none.
+- Assumption in force: prefix by **audience**, which is stable.
+  `/api/v1/**` = public agent-facing REST, **mixed auth by design**;
+  `/admin/**` = the dashboard's own control plane; `/auth/**` = credential
+  exchange; `/` and `/health` = public HTML and liveness.
+- The auth boundary is signposted three ways, all already supported by the code:
+  1. **HTTP itself** — a gated endpoint called without credentials returns 401
+     with `WWW-Authenticate: Bearer` (`app/auth/decorators.py:71-73`). The
+     machine-readable signpost, free, and already correct. An agent does not
+     need to be told which endpoints are public; it needs the gated ones to say
+     so, and they do.
+  2. **README `## Public API` table with an explicit Auth column.** The human
+     signpost, and the actual deliverable answering Erik's question. Every
+     future `/api/v1/` route adds a row.
+  3. **Cache semantics as a corroborating tell** — see D-028.
+- Version segment `/api/v1/`, not `/api/`: one path component now versus two
+  inconsistent schemes forever once agents hardcode paths. Same "take the free
+  forward option" reasoning D-013 and D-014 both argued for.
+- Implementation: new `app/routes/api.py` with
+  `Blueprint("api", __name__, url_prefix="/api/v1")`. **This reinstates a
+  blueprint deliberately deleted** by
+  `_research/2607231705_api-status-removal-plan.md`, whose §4 Option B kept it
+  "as a mount point for imminent future JSON API routes ... unless an API route
+  is already planned". That condition is now met — this is Option B arriving on
+  schedule, not a reversal. `/api/status` is **not** resurrected; `/health`
+  remains canonical.
+- Not filed as §B: the ungated decision is the operator's own stated position on
+  the root card, and choosing the prefix now is D-013's CONFIRMED instruction
+  (*"may impact choices made now (e.g., choice of route names)"*) being carried
+  out, not a fresh question.
+- Reversal cost: **low now, and it only rises.** Renaming or dropping the version
+  segment before any agent consumes it is a one-line change. After adoption it
+  is a breaking change for every external caller — precisely the cost D-013 and
+  D-014 told us to price in advance.
+
 ### D-024 — Hidden models still occupy the unique name index; only the 409 copy changes
 - Status: **ASSUMED**
 - Date raised: 2026-08-05   Date ruled: —
