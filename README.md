@@ -84,6 +84,7 @@ header when called without one.
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/api/v1/modalities` | None | Modality vocabulary assignable to a model |
+| GET | `/api/v1/models` | None | All models with pricing, context, and modality details |
 
 The `GET /api/v1/modalities` endpoint is unauthenticated and returns the full
 set of modality names the model write paths accept:
@@ -108,6 +109,63 @@ The returned `name` values are the exact tokens to send in `input_content` /
 `output_content` when creating or editing a model (see below). Responses are
 cacheable for five minutes and CORS-open so agent and browser clients can poll
 freely.
+
+### `GET /api/v1/models`
+
+Unauthenticated. Returns every model with its pricing, context window, and
+modality details, ordered like the `/` dashboard:
+
+```bash
+curl http://127.0.0.1:5000/api/v1/models
+```
+
+```json
+{
+  "models": [
+    {
+      "id": 1,
+      "name": "anthropic/claude-haiku-4.5",
+      "price_in": 1.0,
+      "price_out": 5.0,
+      "context_tokens": 200000,
+      "input_content": ["Text", "Images", "Files"],
+      "output_content": ["Text"],
+      "hidden": false,
+      "hidden_at": null,
+      "created_at": "2026-08-10T10:54:19Z",
+      "updated_at": "2026-08-10T10:54:19Z"
+    }
+  ]
+}
+```
+
+The optional `include_hidden` parameter controls whether hidden models appear.
+It accepts only `true` or `false`, case-insensitively; anything else (`1`, `0`,
+`yes`, `on`, `""`) returns `400`. The default is `false`, so the plain request
+excludes hidden models and agrees with the `/` dashboard:
+
+```bash
+curl "http://127.0.0.1:5000/api/v1/models?include_hidden=true"
+```
+
+```json
+{"error": "'include_hidden' must be 'true' or 'false'"}
+```
+
+Does a hidden model surprise you with a `409` on `POST /admin/models`? It is
+not a bug: **a hidden model still occupies the unique name index.** List with
+`?include_hidden=true` to see it.
+
+Two fields matter for the read→write loop this endpoint exists to enable:
+
+- `id` is the value to send in `PATCH /admin/models/<id>` when you later edit a
+  model.
+- `input_content` / `output_content` come back in persisted `position` order
+  and are the exact tokens accepted by the create/update write paths — sending
+  them back unchanged will not reorder a model's stored modality sequence.
+
+Responses are cacheable for 60 seconds and CORS-open so agents can poll for
+updated pricing.
 
 ## Authentication
 

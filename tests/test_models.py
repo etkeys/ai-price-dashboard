@@ -90,6 +90,41 @@ class TestAiModelProperties:
             assert visible.is_hidden is False
             assert hidden.is_hidden is True
 
+    def test_is_hidden_usable_as_sql_expression(self, app):
+        """is_hidden compiles in a WHERE clause as `hidden_at IS NOT NULL` (D-036).
+
+        The endpoint's natural query filters with ``~AiModel.is_hidden``, the
+        exact use that raised InvalidRequestError on the pre-fix tree because
+        ``@is_hidden.expression`` did not replace the class-level attribute.
+        This pins the *expression* form so a regression fails loudly.
+        """
+        with app.app_context():
+            visible = AiModel(
+                name="vendor/visible",
+                price_in=1.0,
+                price_out=2.0,
+                context_tokens=100_000,
+            )
+            hidden = AiModel(
+                name="vendor/hidden",
+                price_in=1.0,
+                price_out=2.0,
+                context_tokens=100_000,
+                hidden_at=db.func.now(),
+            )
+            db.session.add_all([visible, hidden])
+            db.session.commit()
+
+            hidden_rows = db.session.scalars(
+                select(AiModel).where(AiModel.is_hidden)
+            ).all()
+            assert [r.name for r in hidden_rows] == ["vendor/hidden"]
+
+            visible_rows = db.session.scalars(
+                select(AiModel).where(~AiModel.is_hidden)
+            ).all()
+            assert [r.name for r in visible_rows] == ["vendor/visible"]
+
 
 class TestSeedIdempotency:
     """Seeding must be safe to run repeatedly."""

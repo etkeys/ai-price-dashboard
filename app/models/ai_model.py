@@ -185,7 +185,7 @@ class AiModel(db.Model):
         """
         return self.hidden_at is not None
 
-    @is_hidden.expression
+    @is_hidden.inplace.expression
     @classmethod
     def _is_hidden_expression(cls):
         """SQL expression mirroring :attr:`is_hidden` for ``WHERE`` filtering."""
