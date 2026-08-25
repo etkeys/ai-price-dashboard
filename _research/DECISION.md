@@ -46,6 +46,201 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-036 — `AiModel.is_hidden` is broken as a SQL expression; fixed in this card
+- Status: **ASSUMED** (defect fix, not a policy choice)
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §6, §A item 9
+- Card: t_937ed477 (implements in t_fa898e85)
+- **This is a real shipped defect, found while validating this endpoint's query
+  and reproduced in isolation.** `app/models/ai_model.py:188` uses the bare
+  `@is_hidden.expression` form. Under SQLAlchemy 2.0.51,
+  `select(AiModel).where(AiModel.is_hidden)` raises
+  `InvalidRequestError: ... expected __clause_element__() to return a
+  ClauseElement object, got: True` — class-level access still runs the instance
+  getter, so SQLAlchemy is handed a Python `bool`.
+- **Why it went unnoticed:** all five existing uses are instance-level
+  (`tests/test_models.py:90-91` and four Jinja refs in
+  `app/templates/admin/models.html`), which take the Python getter and work.
+  No code has ever used it in a query — `app/routes/main.py:18` filters with
+  `AiModel.hidden_at.is_(None)` directly. So the hybrid fails at exactly the one
+  job D-020 created it for: defining the predicate once.
+- Fix: `@is_hidden.expression` → `@is_hidden.inplace.expression`, the form
+  `sort_name` already uses at `app/models/ai_model.py:172` — which is why
+  `sort_name` works in `ORDER BY` and `is_hidden` does not. Verified in a
+  minimal two-class script: the `.expression` form raises, `.inplace.expression`
+  compiles to `WHERE hidden_at IS NOT NULL`. `sort_name` is the only other
+  hybrid on the model and is already correct, so this is the whole class of the
+  bug.
+- In scope for t_fa898e85: one line, on this endpoint's direct query path, with
+  a red-before/green-after unit test pinning the *expression* form. The endpoint
+  must then use `.where(~AiModel.is_hidden)` rather than re-deriving the
+  predicate.
+- Reversal cost: n/a — a defect fix, not a choice.
+
+### D-035 — No pagination, count, sort, or field-selection parameters on the models listing
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §4.1, §A item 8
+- Card: t_937ed477 (implements in t_fa898e85)
+- Assumption in force: `GET /api/v1/models` returns every matching row in one
+  response. No `limit`/`offset`/cursor, no `count` or `total` key, no `sort` or
+  `fields` parameter. 22 seeded rows, ≈6 KB of JSON, bounded by the number of
+  models an administrator has manually created.
+- A `count` field is `len(models)` and adding it is a standing promise to keep
+  it correct for no consumer benefit.
+- Reversal cost: **additive** — any parameter added later defaults to current
+  behaviour and breaks nothing. The `{"models": [...]}` envelope (D-031) is
+  precisely what keeps pagination metadata additive rather than breaking. If the
+  table ever reaches a few hundred rows, revisit then.
+
+### D-034 — Models listing is cacheable for 60s and CORS-open; scoped to the route, no rate limiting
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §7.3, §7.4, §A item 7
+- Card: t_937ed477 (implements in t_fa898e85)
+- Assumption in force: the success response carries
+  `Cache-Control: public, max-age=60` and `Access-Control-Allow-Origin: *`,
+  both hand-written on that one response. **Error responses carry
+  `Cache-Control: no-store` and neither of those headers** — caching a 400 for a
+  minute would serve a client its own stale error on the corrected retry.
+- **60 seconds, not modalities' 300** (D-028): model data is operator-mutable
+  through two write endpoints, so an agent's write should become visible
+  promptly. The modality vocabulary changes only by code change and redeploy.
+- **Binding, and now the second route needing the header:** the CORS header must
+  NOT be applied app-wide, via `after_request`, via a blueprint hook, or via
+  `flask-cors`. With two routes wanting it, factoring it into a hook is the
+  plausible-looking wrong implementation and it would open the authenticated
+  surface. The correct shape is a module-local helper both handlers call. The
+  regression test asserting `/admin/*` still has `no-store` and **no** CORS
+  header is required, not optional.
+- Safety unchanged from D-028b: `Access-Control-Allow-Credentials` is not set
+  and `*` is incompatible with it by spec; auth is a bearer token in
+  `sessionStorage`, not a cookie; `GET`-only so no preflight.
+- **No rate limiting.** There is none anywhere in this app today, on any route.
+  Adding it to this endpoint alone would be inconsistent and would not protect
+  the eleven other unauthenticated-reachable routes.
+- Reversal cost: nil — change or delete a header.
+
+### D-033 — Public API timestamps are ISO 8601 with an explicit `Z`; `/admin/*` is left alone
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §4.5, §A item 6
+- Card: t_937ed477 (implements in t_fa898e85)
+- Assumption in force: `created_at`, `updated_at` and `hidden_at` are emitted as
+  `.isoformat() + "Z"` → `2026-08-10T10:54:19Z`. `hidden_at` is JSON `null`, not
+  `""`, when the model is visible.
+- **Verified: the columns are naive but genuinely UTC.** `_utcnow()`
+  (`app/services/auth_service.py:69-71`) is
+  `datetime.now(datetime.UTC).replace(tzinfo=None)` and the `server_default` is
+  `func.now()`, which SQLite evaluates as UTC. A bare `.isoformat()` therefore
+  emits a zoneless timestamp a machine consumer cannot interpret without
+  out-of-band knowledge.
+- **Deliberate departure** from the bare `.isoformat()` used across
+  `/admin/keys` (`app/routes/admin.py:82-88`, `:177-181`) and
+  `PUT /admin/models/<id>/hidden` (`:499`). Those are consumed by this app's own
+  JavaScript with shared context; this one by third-party agents without it.
+  **Do not retrofit the admin routes in this card** — separate cosmetic change
+  with its own test churn. Kova should treat the divergence as intended.
+- Reversal cost: nil for this endpoint; retrofitting `/admin/*` for consistency
+  is an independent card.
+
+### D-032 — Public model modality lists keep persisted `position` order, not alphabetical
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §4.4, §A item 5
+- Card: t_937ed477 (implements in t_fa898e85)
+- Question: the HTML surfaces render modalities alphabetically via a Jinja
+  `| sort` (D-008). Should the API do the same, so the two agree?
+- Assumption in force: **no.** `input_content` / `output_content` are returned in
+  persisted `position` order — verified, `anthropic/claude-haiku-4.5` returns
+  `["Text", "Images", "Files"]`.
+- Why, in order of weight: (1) **round-trip fidelity.** An agent that reads a
+  model, changes a price and `PATCH`es the object back would, under alphabetical
+  ordering, rewrite every association row into alphabetical order as a side
+  effect — `PATCH` deletes and re-inserts association rows from list order
+  (`app/routes/admin.py:437-448`), so that is a real write, not a cosmetic one.
+  A read endpoint must not cause data churn on write-back. (2) **D-008 was
+  explicitly scoped as presentation-only**, with the properties and the
+  `position` column named as untouched; `input_content` is one of those
+  properties, so sorting here would extend a presentation choice into the data
+  contract. (3) it makes `position` observable again, which bears on the column
+  retirement question D-008 parked.
+- Kova will see two surfaces ordering modalities differently. **That is
+  specified, not a defect**, and a test pins it.
+- Reversal cost: trivial mechanically (one `sorted()`), but it would silently
+  reorder association rows for any client that round-trips through `PATCH`.
+  Raise as its own card if ever reconsidered.
+
+### D-031 — Response is `{"models": [...]}` with `id` included, diverging from D-026
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §4.1, §4.2, §A items 3, 4
+- Card: t_937ed477 (implements in t_fa898e85)
+- Assumption in force: an envelope object with a `models` key, **not** a bare
+  top-level array (overriding t_fa898e85's card wording), each object carrying
+  exactly eleven always-present fields: `id`, `name`, `price_in`, `price_out`,
+  `context_tokens`, `input_content`, `output_content`, `hidden`, `hidden_at`,
+  `created_at`, `updated_at`. No conditional keys, no `count`.
+- Envelope matches `GET /admin/keys` → `{"keys": [...]}`
+  (`app/routes/admin.py:93`) and `/api/v1/modalities` → `{"modalities": [...]}`
+  (D-026), and leaves room for additive siblings.
+- **`id` is included, and this is not a contradiction of D-026** — all three of
+  D-026's reasons for omitting modality `id` invert for models: (1) `ai_models.id`
+  is a persisted surrogate for an operator-created row, not a seed artefact of a
+  code literal, so it *is* stable; (2) both model write endpoints address the
+  model **by id** — `PATCH /admin/models/<int:model_id>`
+  (`app/routes/admin.py:394`) and `PUT /admin/models/<int:model_id>/hidden`
+  (`:461`) — while `name` is immutable (D-012); (3) the consumer is the agent
+  this card exists for, and without `id` the read→write loop is impossible.
+  D-026's actual principle — *publish the token the client is meant to send
+  back* — is what puts `id` in here and keeps it out there.
+- `context_tokens` is the **raw integer**; `format_context` / `format_price` are
+  presentation helpers and must not appear in this route.
+- `hidden` + `hidden_at` reuse the exact field names from D-022's
+  `PUT .../hidden` response, so no new vocabulary is invented.
+- Reversal cost: **asymmetric.** Additive keys are free; unwrapping the envelope
+  or removing `id` later is breaking. The `id` decision is the genuinely hard one
+  to reverse — but omitting it makes the endpoint useless for its stated purpose.
+
+### D-030 — `GET /api/v1/models` with a strict `?include_hidden=true|false`, defaulting to false
+- Status: **ASSUMED**
+- Date raised: 2026-08-10   Date ruled: —
+- Source: `_research/2608101058_public-models-listing-endpoint-spec.md` §3, §A items 1, 2
+- Card: t_937ed477 (implements in t_fa898e85; root t_bca012d9)
+- Question: the cards suggest `/api/publish/models` and "a query parameter to
+  control inclusion of hidden models". What path, what parameter, what default?
+- Assumption in force (a): path is **`GET /api/v1/models`**, overriding the
+  card's `/api/publish/models`. D-025 already fixed `/api/v1/` as the public,
+  agent-facing prefix and it is shipped at `999f495`. "publish" is a verb
+  fragment, neither audience nor resource, and adopting it would give the app two
+  public API prefixes on its second public endpoint. Anticipates
+  `GET/PATCH /api/v1/models/<id>` per D-013's binding naming consequence.
+- Assumption in force (b): parameter is **`include_hidden`**, accepting only
+  `true` / `false` **case-insensitively**; absent → `false`. `1`, `0`, `yes`,
+  `on`, `""` and anything else are **400** with `{"error": ...}` and
+  `Cache-Control: no-store`. Duplicate keys: first value wins (Werkzeug
+  `args.get` semantics, verified).
+- **Binding: `request.args.get(..., type=bool)` must NOT be used.** Verified —
+  `type=bool` is `bool(str)`, so `?include_hidden=false` yields `True` and
+  `?include_hidden=0` yields `True`. Using it inverts the caller's intent
+  silently. This is the same class of trap D-022 guarded against by rejecting
+  `{"hidden": 1}`, and the two endpoints must not disagree about whether `1`
+  means true.
+- Default `false` makes the zero-configuration response agree with `/` (D-021),
+  the surface a human looks at; an agent opts in to the full picture explicitly.
+  The reverse default would make the simplest call return rows the dashboard
+  denies exist.
+- Rejected: `?hidden=include|exclude|only` and `?visibility=visible|hidden|all` —
+  the `only` case is derivable client-side from `include_hidden=true` plus the
+  per-object `hidden` field, so a tri-state buys nothing and costs a code path;
+  and `visibility` renames the concept D-020/D-021/D-022 all call "hidden". Also
+  rejected: a separate `/models/hidden` endpoint — a filter is not a resource.
+- Reversal cost: (a) **low now, rising** — a rename before any agent consumes it
+  is one line; after adoption it is a breaking change for every external caller,
+  the exact cost D-013 and D-014 told us to price in advance. (b) widening the
+  accepted value set later is purely additive; changing the default or the
+  parameter name is breaking once consumed.
+
 ### D-029 — An empty modality vocabulary is `200` + empty array, not an error
 - Status: **ASSUMED**
 - Date raised: 2026-08-08   Date ruled: —
