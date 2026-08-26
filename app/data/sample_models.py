@@ -4,18 +4,26 @@ This module is the seed source of truth for the application database. New
 installs are populated from ``SAMPLE_MODELS`` via ``flask seed``.
 
 Public symbol:
-    SAMPLE_MODELS: list[dict] - 22 AI models with pricing, context window,
-    and modality information as per the home-page mockup.
+    SAMPLE_MODELS: list[dict] - 23 AI models with pricing, context window,
+    and modality information.
 
 Record shape:
     name            str        "vendor/model-slug", unique identifier.
-    price_in        float      USD per 1M input tokens.
-    price_out       float      USD per 1M output tokens.
-    context_tokens  int        Raw context window size in tokens.
+    price_in        float|None USD input price. ``None`` means the model has
+                              no applicable input price (e.g. an output-only
+                              image model); numeric ``0`` means free input.
+    price_out       float      USD output price (required).
+    context_type    str        "tokens" or "image" (defaults to "tokens").
+    context_tokens  int|None   Raw context window in tokens for ``tokens``
+                              context; ``None`` for ``image`` context.
+    pricing_unit    str        "million_tokens" or "image" (defaults to
+                              "million_tokens").
     input_content   list[str]  Input modalities.
-    output_content  list[str]   Output modalities.
+    output_content  list[str]  Output modalities.
 
-Modalities used in this dataset: Text, Images, Files, Videos, Audio.
+Legacy records omit ``context_type``/``pricing_unit``; seeding applies the
+default token semantics (D-037..D-039, ruling 3A). Modalities used in this
+dataset: Text, Images, Files, Videos, Audio.
 """
 
 SAMPLE_MODELS: list[dict] = [
@@ -194,5 +202,17 @@ SAMPLE_MODELS: list[dict] = [
         "context_tokens": 1_000_000,
         "input_content": ["Text"],
         "output_content": ["Text"],
+    },
+    # Output-only image model: no applicable input price (price_in NULL),
+    # billed per generated image, with an image context (no token notion).
+    {
+        "name": "bytedance-seed/seedream-5-0-lite",
+        "price_in": None,
+        "price_out": 0.035,
+        "context_type": "image",
+        "context_tokens": None,
+        "pricing_unit": "image",
+        "input_content": ["Text"],
+        "output_content": ["Images"],
     },
 ]

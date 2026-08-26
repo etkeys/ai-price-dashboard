@@ -5,7 +5,11 @@
 {% block content %}
 <section class="models-listing">
     <h2>Models</h2>
-    <p class="unit-note">Prices in USD per 1M tokens.</p>
+    <p class="unit-note">
+        Prices in USD per the model's billing unit (e.g. /1M tokens or /image).
+        Input price of &ldquo;N/A&rdquo; means the model has no applicable input
+        price; $0.00 means free input.
+    </p>
     <div class="table-scroll">
         <table class="models-table">
             <thead>
@@ -22,9 +26,9 @@
                 {% for model in models %}
                 <tr>
                     <td class="model-name">{{ model.name }}</td>
-                    <td class="num">${{ format_price(model.price_in) }}</td>
-                    <td class="num">${{ format_price(model.price_out) }}</td>
-                    <td class="num">{{ format_context(model.context_tokens) }}</td>
+                    <td class="num">{{ render_price(model.price_in, model.pricing_unit) }}</td>
+                    <td class="num">{{ render_price(model.price_out, model.pricing_unit) }}</td>
+                    <td class="num">{{ format_context(model.context_tokens, model.context_type) }}</td>
                     <td>{{ model.input_content | sort | join(', ') }}</td>
                     <td>{{ model.output_content | sort | join(', ') }}</td>
                 </tr>

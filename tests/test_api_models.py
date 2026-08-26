@@ -1,7 +1,9 @@
 """Tests for the public models listing endpoint (D-030..D-036).
 
 The route returns ``{"models": [...]}`` — an envelope, not a bare array (D-031)
-— where each model object carries exactly the eleven fields of the spec §4.3.
+— where each model object carries the fields of the spec §4.3 as amended by
+D-037..D-039 (additive ``context_type``/``pricing_unit``; nullable
+``price_in``/``context_tokens`` serialize as JSON null).
 Filtering is governed by ``?include_hidden=true|false`` (strict, D-030). All
 helpers here use direct ORM manipulation to hide models because the hide
 write path requires an administrator token.
@@ -23,7 +25,9 @@ EXPECTED_MODEL_FIELDS = {
     "name",
     "price_in",
     "price_out",
+    "context_type",
     "context_tokens",
+    "pricing_unit",
     "input_content",
     "output_content",
     "hidden",
@@ -103,12 +107,34 @@ def test_include_hidden_false_matches_default(seeded_app):
 
 
 def test_model_object_shape(seeded_client):
-    """Each object has exactly the eleven fields of §4.3; tokens stay raw."""
+    """Each token object has the §4.3 fields (+context_type/unit); tokens stay raw."""
     payload = seeded_client.get("/api/v1/models").get_json()
     obj = next(m for m in payload["models"] if m["name"] == "anthropic/claude-haiku-4.5")
     assert set(obj.keys()) == EXPECTED_MODEL_FIELDS
+    assert obj["context_type"] == "tokens"
+    assert obj["pricing_unit"] == "million_tokens"
     assert isinstance(obj["context_tokens"], int)
     assert obj["context_tokens"] == 200_000
+    assert obj["price_in"] == 1.0
+
+
+def test_seedream_like_row_serializes_nullable_fields(seeded_client):
+    """An output-only image row emits price_in:null, context_tokens:null, image types.
+
+    D-037..D-039: inapplicable values serialize as JSON null, not a fabricated
+    number; the public object still carries the full field set.
+    """
+    payload = seeded_client.get("/api/v1/models").get_json()
+    obj = next(
+        m for m in payload["models"]
+        if m["name"] == "bytedance-seed/seedream-5-0-lite"
+    )
+    assert set(obj.keys()) == EXPECTED_MODEL_FIELDS
+    assert obj["price_in"] is None
+    assert obj["price_out"] == 0.035
+    assert obj["context_type"] == "image"
+    assert obj["context_tokens"] is None
+    assert obj["pricing_unit"] == "image"
 
 
 def test_modality_lists_preserve_persisted_order(seeded_client):
