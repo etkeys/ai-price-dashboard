@@ -127,17 +127,47 @@ curl http://127.0.0.1:5000/api/v1/models
       "name": "anthropic/claude-haiku-4.5",
       "price_in": 1.0,
       "price_out": 5.0,
+      "context_type": "tokens",
       "context_tokens": 200000,
+      "pricing_unit": "million_tokens",
       "input_content": ["Text", "Images", "Files"],
       "output_content": ["Text"],
       "hidden": false,
       "hidden_at": null,
       "created_at": "2026-08-10T10:54:19Z",
       "updated_at": "2026-08-10T10:54:19Z"
+    },
+    {
+      "id": 24,
+      "name": "bytedance-seed/seedream-5-0-lite",
+      "price_in": null,
+      "price_out": 0.035,
+      "context_type": "image",
+      "context_tokens": null,
+      "pricing_unit": "image",
+      "input_content": ["Text"],
+      "output_content": ["Images"],
+      "hidden": false,
+      "hidden_at": null,
+      "created_at": "2026-08-26T19:10:00Z",
+      "updated_at": "2026-08-26T19:10:00Z"
     }
   ]
 }
 ```
+
+Fields added by the output-only pricing change (D-037..D-039):
+
+- `context_type` — `"tokens"` or `"image"`. Governs `context_tokens`: token
+  models carry a positive integer; image models carry `null` (no token notion).
+- `pricing_unit` — `"million_tokens"` or `"image"`. The billing denominator of
+  the price columns, independent of `context_type`.
+- `price_in` and `context_tokens` may be **JSON `null`**. `null` input price
+  means the model has no applicable input price (an output-only image model);
+  a numeric `0` is a distinct free-input price. Inapplicable values serialize
+  as `null`, never a fabricated number. Existing token rows keep their numeric
+  values, so this addition is backward compatible (the object gains the two new
+  keys; no existing key changes type for legacy rows).
 
 The optional `include_hidden` parameter controls whether hidden models appear.
 It accepts only `true` or `false`, case-insensitively; anything else (`1`, `0`,
@@ -247,8 +277,11 @@ API key using the **Authenticate** control in the header, then open
 shown to administrators; updaters see the existing-models table and the edit
 dialog only.
 
-All model attributes are required, including at least one input modality and
-one output modality.
+All model attributes are required except `context_type` and `pricing_unit`;
+when omitted, both default to the legacy token semantics (`tokens` +
+`million_tokens`) so existing request bodies are unchanged. `price_in` is
+required as a key but may be JSON `null` when the model has no applicable input
+price; an `image` `context_type` requires `context_tokens: null`.
 
 The equivalent HTTP request is:
 
@@ -263,6 +296,26 @@ curl -X POST \
     "context_tokens": 128000,
     "input_content": ["Text"],
     "output_content": ["Text"]
+  }' \
+  http://127.0.0.1:5000/admin/models
+```
+
+An output-only image model uses `price_in: null`, an `image` context type, no
+`context_tokens`, and per-image pricing:
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "acme/image-gen",
+    "price_in": null,
+    "price_out": 0.035,
+    "context_type": "image",
+    "context_tokens": null,
+    "pricing_unit": "image",
+    "input_content": ["Text"],
+    "output_content": ["Images"]
   }' \
   http://127.0.0.1:5000/admin/models
 ```
@@ -297,10 +350,38 @@ curl -X PATCH \
   http://127.0.0.1:5000/admin/models/<model_id>
 ```
 
-Any subset of `price_in`, `price_out`, `context_tokens`, `input_content`,
-and `output_content` may be sent; omitted fields are left unchanged.
-`name`, `id`, `created_at`, and `updated_at` are immutable and rejected with
-`400` if present in the body.
+Any subset of `price_in`, `price_out`, `context_tokens`, `context_type`,
+`pricing_unit`, `input_content`, and `output_content` may be sent; omitted
+fields are left unchanged. `name`, `id`, `created_at`, and `updated_at` are
+immutable and rejected with `400` if present in the body.
+
+PATCH semantics for the new fields (D-037..D-039):
+
+- `price_in: null` explicitly sets the input price to not-applicable; omitting
+  `price_in` leaves it unchanged; numeric `0` is a distinct free-input price.
+  `price_out` must always be a non-negative number — `null` is rejected.
+- `context_type` and `pricing_unit` use the same closed vocabularies as create,
+  and omit = unchanged.
+- **Changing `context_type` is atomic**: it must be paired with `context_tokens`
+  in the same request. Image requires `context_tokens: null`; tokens requires a
+  positive integer. The server validates the complete resulting row before
+  committing, so you can never leave a model in a half-transitioned state.
+  `pricing_unit` may change independently.
+
+```bash
+# Transition a token model to an output-only image model:
+curl -X PATCH \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "price_in": null,
+    "price_out": 0.035,
+    "context_type": "image",
+    "context_tokens": null,
+    "pricing_unit": "image"
+  }' \
+  http://127.0.0.1:5000/admin/models/<model_id>
+```
 
 ### Recovery
 

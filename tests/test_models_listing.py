@@ -6,7 +6,7 @@ from sqlalchemy import event, func, select
 from app.data.sample_models import SAMPLE_MODELS
 from app.extensions import db
 from app.models import AiModel
-from app.utils.helpers import format_context, format_price
+from app.utils.helpers import format_context, format_price, render_price
 
 
 ALLOWED_MODALITIES = {"Text", "Images", "Files", "Videos", "Audio"}
@@ -39,6 +39,55 @@ def test_format_context(tokens, expected):
 def test_format_price(value, expected):
     """format_price should render values with two decimals."""
     assert format_price(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("context_tokens", "context_type", "expected"),
+    [
+        (200_000, "tokens", "200K"),
+        (1_000_000, "tokens", "1M"),
+        (1_500_000, "tokens", "1.5M"),
+        (None, "image", "Image"),
+        (200_000, None, "200K"),  # legacy single-arg default treats as tokens
+    ],
+)
+def test_format_context_with_type(context_tokens, context_type, expected):
+    """format_context shows the context type; image contexts have no token count."""
+    assert format_context(context_tokens, context_type) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "pricing_unit", "expected"),
+    [
+        (None, "million_tokens", "N/A"),
+        (None, "image", "N/A"),
+        (0.0, "million_tokens", "$0.00 /1M tokens"),
+        (0.0, "image", "$0.00 /image"),
+        (1.0, "million_tokens", "$1.00 /1M tokens"),
+        (0.035, "image", "$0.035 /image"),
+    ],
+)
+def test_render_price(value, pricing_unit, expected):
+    """render_price renders N/A for inapplicable, unit suffix from pricing_unit."""
+    assert render_price(value, pricing_unit) == expected
+
+
+def test_index_page_renders_output_only_image_model(seeded_client):
+    """Seedream renders N/A input, $0.035/image output, and Image context."""
+    html = seeded_client.get("/").data.decode()
+    # price_out cell
+    assert "$0.035 /image" in html
+    # inapplicable input price renders N/A
+    assert "N/A" in html
+    # image context column
+    assert ">Image<" in html or " Image" in html
+
+
+def test_index_page_keeps_legacy_token_rendering(seeded_client):
+    """Token rows keep their /1M tokens suffix and 200K humanized context."""
+    html = seeded_client.get("/").data.decode()
+    assert "$5.00 /1M tokens" in html
+    assert ">200K<" in html or "200K" in html
 
 
 def test_index_page_renders_table(seeded_client):
@@ -93,7 +142,7 @@ def test_index_page_uses_bounded_query_count(seeded_client, app):
 
 
 def test_sample_models_shape():
-    """Every sample record must have the required fields and valid values."""
+    """Every sample record must have valid, coherent field values."""
     assert SAMPLE_MODELS
     names = set()
     for model in SAMPLE_MODELS:
@@ -104,13 +153,23 @@ def test_sample_models_shape():
         assert "input_content" in model
         assert "output_content" in model
 
-        assert isinstance(model["price_in"], (int, float))
+        context_type = model.get("context_type", "tokens")
+        assert context_type in ("tokens", "image")
+        pricing_unit = model.get("pricing_unit", "million_tokens")
+        assert pricing_unit in ("million_tokens", "image")
+
+        if model["price_in"] is not None:
+            assert isinstance(model["price_in"], (int, float))
+            assert model["price_in"] >= 0
         assert isinstance(model["price_out"], (int, float))
-        assert model["price_in"] >= 0
         assert model["price_out"] >= 0
 
-        assert isinstance(model["context_tokens"], int)
-        assert model["context_tokens"] > 0
+        if context_type == "image":
+            # Image context: no numeric token notion; input price may be N/A.
+            assert model["context_tokens"] is None
+        else:
+            assert isinstance(model["context_tokens"], int)
+            assert model["context_tokens"] > 0
 
         assert isinstance(model["input_content"], list)
         assert isinstance(model["output_content"], list)

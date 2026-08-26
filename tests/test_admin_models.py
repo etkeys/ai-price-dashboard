@@ -3,6 +3,7 @@
 import re
 
 import pytest
+from app.extensions import db
 from app.models.auth import ROLE_ADMINISTRATOR, ROLE_UPDATER
 from app.models import AiModel
 from app.services.auth_service import create_api_key
@@ -964,3 +965,289 @@ class TestSetModelHidden:
         assert resp.status_code == 409
         assert "hidden model named" in resp.json["error"]
         assert "Unhide it from the manage page" in resp.json["error"]
+
+
+class TestOutputOnlyAndContextType:
+    """Output-only pricing and token/image context support (D-037..D-039)."""
+
+    FILE = __file__
+
+    def _admin_headers(self, app):
+        from app.services.auth_service import create_api_key
+
+        with app.app_context():
+            _, token = create_api_key(name="admin", role=ROLE_ADMINISTRATOR)
+        return {"Authorization": f"Bearer {token}"}
+
+    def _pick_model(self, app):
+        from sqlalchemy import select
+
+        with app.app_context():
+            return db.session.scalar(select(AiModel).order_by(AiModel.name))
+
+    # ----- create -----
+
+    def test_create_output_only_image_model(self, seeded_client, app):
+        """A create with price_in null and image context persists as output-only."""
+        headers = self._admin_headers(app)
+        resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/image-gen",
+                "price_in": None,
+                "price_out": 0.035,
+                "context_type": "image",
+                "context_tokens": None,
+                "pricing_unit": "image",
+                "input_content": ["Text"],
+                "output_content": ["Images"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 201
+        model_id = resp.json["id"]
+        with app.app_context():
+            fresh = db.session.get(AiModel, model_id)
+            assert fresh.price_in is None
+            assert fresh.price_out == 0.035
+            assert fresh.context_type == "image"
+            assert fresh.context_tokens is None
+            assert fresh.pricing_unit == "image"
+
+    def test_legacy_create_body_still_works_and_defaults_token(self, seeded_client, app):
+        """An old POST body (no type/unit fields) succeeds with token defaults.
+
+        Ruling 3A: omitted context_type/pricing_unit mean token context billed
+        per million tokens, so pre-existing clients keep working.
+        """
+        headers = self._admin_headers(app)
+        resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/legacy-body",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "context_tokens": 8192,
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 201
+        with app.app_context():
+            fresh = db.session.get(AiModel, resp.json["id"])
+            assert fresh.context_type == "tokens"
+            assert fresh.pricing_unit == "million_tokens"
+            assert fresh.price_in == 1.0
+            assert fresh.context_tokens == 8192
+
+    def test_create_price_in_null_is_distinct_from_zero(self, seeded_client, app):
+        """price_in null (not applicable) and 0 (free) both persist distinctly."""
+        headers = self._admin_headers(app)
+        null_resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/null-input",
+                "price_in": None,
+                "price_out": 2.0,
+                "context_tokens": 1000,
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=headers,
+        )
+        zero_resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/zero-input",
+                "price_in": 0,
+                "price_out": 2.0,
+                "context_tokens": 1000,
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=headers,
+        )
+        assert null_resp.status_code == 201
+        assert zero_resp.status_code == 201
+        with app.app_context():
+            null_row = db.session.get(AiModel, null_resp.json["id"])
+            zero_row = db.session.get(AiModel, zero_resp.json["id"])
+            assert null_row.price_in is None
+            assert zero_row.price_in == 0.0
+            assert zero_row.price_in is not None
+
+    def test_create_rejects_bad_context_type(self, seeded_client, app):
+        """context_type outside the closed vocabulary is rejected on create."""
+        headers = self._admin_headers(app)
+        resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/bad-type",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "context_type": "bogus",
+                "context_tokens": 1000,
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "context_type" in resp.json["error"]
+
+    def test_create_rejects_bad_pricing_unit(self, seeded_client, app):
+        """pricing_unit outside the closed vocabulary is rejected on create."""
+        headers = self._admin_headers(app)
+        resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/bad-unit",
+                "price_in": 1.0,
+                "price_out": 2.0,
+                "context_type": "tokens",
+                "context_tokens": 1000,
+                "pricing_unit": "per-model",
+                "input_content": ["Text"],
+                "output_content": ["Text"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "pricing_unit" in resp.json["error"]
+
+    def test_create_image_context_with_numeric_tokens_rejected(self, seeded_client, app):
+        """An image context cannot carry a numeric token count."""
+        headers = self._admin_headers(app)
+        resp = seeded_client.post(
+            "/admin/models",
+            json={
+                "name": "acme/incoherent",
+                "price_in": None,
+                "price_out": 2.0,
+                "context_type": "image",
+                "context_tokens": 1000,
+                "input_content": ["Text"],
+                "output_content": ["Images"],
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "image context" in resp.json["error"]
+
+    # ----- PATCH -----
+
+    def test_patch_transition_tokens_to_image_is_atomic(self, seeded_app):
+        """Changing context_type to image requires context_tokens:null same request."""
+        model = self._pick_model(seeded_app)
+        headers = self._admin_headers(seeded_app)
+        client = seeded_app.test_client()
+
+        # Changing type without context_tokens fails.
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"context_type": "image"},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "context_tokens" in resp.json["error"]
+
+        # Changing type WITH context_tokens:null succeeds atomically.
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"context_type": "image", "context_tokens": None, "price_in": None},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        with seeded_app.app_context():
+            fresh = db.session.get(AiModel, model.id)
+            assert fresh.context_type == "image"
+            assert fresh.context_tokens is None
+            assert fresh.price_in is None
+
+    def test_patch_transition_image_to_tokens_is_atomic(self, seeded_app):
+        """Switching an image row to token context needs a positive context_tokens."""
+        model = self._pick_model(seeded_app)
+        headers = self._admin_headers(seeded_app)
+        client = seeded_app.test_client()
+
+        assert client.patch(
+            f"/admin/models/{model.id}",
+            json={"context_type": "image", "context_tokens": None, "price_in": None},
+            headers=headers,
+        ).status_code == 200
+
+        # image -> tokens without context_tokens fails.
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"context_type": "tokens"},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "context_tokens" in resp.json["error"]
+
+        # image -> tokens with a positive context_tokens succeeds.
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"context_type": "tokens", "context_tokens": 4096, "price_in": 0.1},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        with seeded_app.app_context():
+            fresh = db.session.get(AiModel, model.id)
+            assert fresh.context_type == "tokens"
+            assert fresh.context_tokens == 4096
+            assert fresh.price_in == 0.1
+
+    def test_patch_price_in_null_is_accepted_and_omission_unchanged(self, seeded_app):
+        """Explicit price_in:null sets not-applicable; omission leaves it unchanged."""
+        model = self._pick_model(seeded_app)
+        headers = self._admin_headers(seeded_app)
+        client = seeded_app.test_client()
+
+        # Explicit null.
+        assert client.patch(
+            f"/admin/models/{model.id}", json={"price_in": None}, headers=headers
+        ).status_code == 200
+        with seeded_app.app_context():
+            assert db.session.get(AiModel, model.id).price_in is None
+
+        # Omission: send only price_out, price_in stays null.
+        assert client.patch(
+            f"/admin/models/{model.id}", json={"price_out": 7.0}, headers=headers
+        ).status_code == 200
+        with seeded_app.app_context():
+            row = db.session.get(AiModel, model.id)
+            assert row.price_out == 7.0
+            assert row.price_in is None
+
+    def test_updater_can_edit_context_fields(self, seeded_app):
+        """D-012: an updater may edit context_type/pricing_unit on an existing row."""
+        from app.services.auth_service import create_api_key
+
+        model = self._pick_model(seeded_app)
+        with seeded_app.app_context():
+            _, token = create_api_key(name="updater", role=ROLE_UPDATER)
+        client = seeded_app.test_client()
+        resp = client.patch(
+            f"/admin/models/{model.id}",
+            json={"pricing_unit": "image", "price_out": 0.035},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        with seeded_app.app_context():
+            fresh = db.session.get(AiModel, model.id)
+            assert fresh.pricing_unit == "image"
+            assert fresh.price_out == 0.035
+
+    def test_patch_price_out_null_rejected(self, seeded_app):
+        """price_out must remain non-null; explicit null is rejected."""
+        model = self._pick_model(seeded_app)
+        headers = self._admin_headers(seeded_app)
+        resp = seeded_app.test_client().patch(
+            f"/admin/models/{model.id}",
+            json={"price_out": None},
+            headers=headers,
+        )
+        assert resp.status_code == 400
+        assert "price_out" in resp.json["error"]
