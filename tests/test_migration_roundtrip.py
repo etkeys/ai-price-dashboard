@@ -63,6 +63,57 @@ def _insert_legacy(app, name, price_in, price_out, context_tokens):
         db.session.commit()
 
 
+def _seed_modalities(app, names):
+    """Insert the modality vocabulary and return their ids in order.
+
+    The schema REQUIRES parent modalities rows to exist before any association
+    row can be inserted (RESTRICT FK). Returns a dict of name -> id.
+    """
+    with app.app_context():
+        conn = db.session.connection()
+        ids = {}
+        for name in names:
+            conn.exec_driver_sql("INSERT INTO modalities (name) VALUES (?)", (name,))
+            ids[name] = conn.exec_driver_sql(
+                "SELECT id FROM modalities WHERE name = ?", (name,)
+            ).scalar()
+        db.session.commit()
+    return ids
+
+
+def _insert_association(app, table, ai_model_id, modality_id, position):
+    with app.app_context():
+        conn = db.session.connection()
+        conn.exec_driver_sql(
+            f"INSERT INTO {table} (ai_model_id, modality_id, position) "
+            "VALUES (?, ?, ?)",
+            (ai_model_id, modality_id, position),
+        )
+        db.session.commit()
+
+
+def _associations(app, table):
+    sql = (
+        f"SELECT ai_model_id, modality_id, position FROM {table} "
+        "ORDER BY ai_model_id, position"
+    )
+    with app.app_context():
+        return db.session.execute(db.text(sql)).mappings().all()
+
+
+def _foreign_keys(app):
+    with app.app_context():
+        conn = db.session.connection()
+        return conn.exec_driver_sql("PRAGMA foreign_keys").scalar()
+
+
+def _model_id(app, name):
+    with app.app_context():
+        return db.session.execute(
+            db.text("SELECT id FROM ai_models WHERE name = :name"), {"name": name}
+        ).scalar()
+
+
 def _rows(app, cols, where=""):
     sql = f"SELECT {cols} FROM ai_models {where} ORDER BY name"
     with app.app_context():
@@ -140,3 +191,78 @@ def test_downgrade_upgrade_round_trip_on_legacy_data(migrated_app):
     rows = _rows(migrated_app, "name, context_type, pricing_unit")
     assert rows[0]["context_type"] == "tokens"
     assert rows[0]["pricing_unit"] == "million_tokens"
+
+
+def _seed_with_modalities(migrated_app):
+    """Insert legacy models + modalities + associations, return the snapshot."""
+    mods = _seed_modalities(migrated_app, ["Text", "Images", "Files", "Audio"])
+    _insert_legacy(migrated_app, "legacy/a", 1.0, 5.0, 100000)
+    _insert_legacy(migrated_app, "legacy/b", 0.0, 0.035, 66000)
+    a_id = _model_id(migrated_app, "legacy/a")
+    b_id = _model_id(migrated_app, "legacy/b")
+
+    # Nontrivial, deliberately out-of-order positions to pin exact preservation.
+    _insert_association(migrated_app, "ai_model_input_modalities", a_id, mods["Text"], 2)
+    _insert_association(migrated_app, "ai_model_input_modalities", a_id, mods["Images"], 0)
+    _insert_association(migrated_app, "ai_model_input_modalities", a_id, mods["Audio"], 5)
+    _insert_association(migrated_app, "ai_model_input_modalities", b_id, mods["Files"], 1)
+    _insert_association(migrated_app, "ai_model_output_modalities", a_id, mods["Text"], 0)
+    _insert_association(migrated_app, "ai_model_output_modalities", a_id, mods["Files"], 4)
+    return {
+        "input": sorted([(a_id, mods["Text"], 2), (a_id, mods["Images"], 0), (a_id, mods["Audio"], 5), (b_id, mods["Files"], 1)]),
+        "output": sorted([(a_id, mods["Text"], 0), (a_id, mods["Files"], 4)]),
+    }
+
+
+def _as_tuples(rows):
+    return sorted((r["ai_model_id"], r["modality_id"], r["position"]) for r in rows)
+
+
+def test_preserves_modality_associations_on_upgrade(migrated_app):
+    """Upgrade must keep every Input/Output Content assignment, with positions."""
+    # Pin the exact production condition that caused the data loss.
+    assert _foreign_keys(migrated_app) == 1
+    expected = _seed_with_modalities(migrated_app)
+
+    _upgrade_head(migrated_app)
+
+    assert _as_tuples(_associations(migrated_app, "ai_model_input_modalities")) == expected["input"]
+    assert _as_tuples(_associations(migrated_app, "ai_model_output_modalities")) == expected["output"]
+
+
+def test_preserves_modality_associations_on_upgrade_downgrade_round_trip(migrated_app):
+    """Downgrade and re-upgrade must both preserve modality assignments."""
+    assert _foreign_keys(migrated_app) == 1
+    expected = _seed_with_modalities(migrated_app)
+    _upgrade_head(migrated_app)
+
+    # Legacy-compatible rows: downgrade must not delete associations.
+    _downgrade_prev(migrated_app)
+    assert _as_tuples(_associations(migrated_app, "ai_model_input_modalities")) == expected["input"]
+    assert _as_tuples(_associations(migrated_app, "ai_model_output_modalities")) == expected["output"]
+
+    # Re-upgrade reproduces the associations too.
+    _upgrade_head(migrated_app)
+    assert _as_tuples(_associations(migrated_app, "ai_model_input_modalities")) == expected["input"]
+    assert _as_tuples(_associations(migrated_app, "ai_model_output_modalities")) == expected["output"]
+
+
+def test_upgrade_with_no_associations_is_idempotent(migrated_app):
+    """A fresh install (no assignments) upgrades cleanly and stays empty."""
+    assert _foreign_keys(migrated_app) == 1
+    mods = _seed_modalities(migrated_app, ["Text"])
+    _insert_legacy(migrated_app, "legacy/blank", 1.0, 5.0, 100000)
+
+    _upgrade_head(migrated_app)
+
+    assert _associations(migrated_app, "ai_model_input_modalities") == []
+    assert _associations(migrated_app, "ai_model_output_modalities") == []
+    # Schema + defaults unchanged for the parent row.
+    rows = _rows(migrated_app, "name, context_type, pricing_unit")
+    assert rows[0]["context_type"] == "tokens"
+    assert rows[0]["pricing_unit"] == "million_tokens"
+    # Modalities vocab is untouched (RESTRICT FK target must survive).
+    with migrated_app.app_context():
+        assert db.session.execute(
+            db.text("SELECT COUNT(*) FROM modalities")
+        ).scalar() == len(mods)

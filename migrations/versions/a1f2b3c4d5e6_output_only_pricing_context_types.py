@@ -23,7 +23,55 @@ branch_labels = None
 depends_on = None
 
 
+# The modality association tables reference ai_models.id with ON DELETE CASCADE
+# (see 637848f507e4). SQLite batch mode rebuilds ai_models by creating a
+# replacement table, then DROPPING the original — and with PRAGMA foreign_keys=ON
+# (enabled by app/__init__.py) that drop cascades a delete through both
+# association tables, silently destroying every stored Input/Output Content
+# assignment. Alembic then renames its replacement into place, but the child rows
+# are already gone. Preserve them by holding every assignment row in memory
+# across the rebuild, then reinserting afterward. In-memory staging is used
+# instead of a temporary SQLite table because Alembic's SQLite batch mode may
+# drop leftover auxiliary tables during the rebuild. This must wrap BOTH the
+# upgrade and downgrade rebuilds, which are equally destructive.
+_ASSOCIATION_TABLES = ("ai_model_input_modalities", "ai_model_output_modalities")
+
+
+def _snapshot_associations():
+    """Read every modalities-assignment row into memory, out of cascade's reach."""
+    conn = op.get_bind()
+    cols = "ai_model_id, modality_id, position"
+    return {
+        src: [tuple(r) for r in conn.execute(sa.text(f"SELECT {cols} FROM {src}")).fetchall()]
+        for src in _ASSOCIATION_TABLES
+    }
+
+
+def _restore_associations(snapshot):
+    """Reinsert the preserved rows once the rebuilt parent exists.
+
+    Rows are restored directly into the original tables, which retain their
+    cascade FKs to the freshly-renamed ai_models and their RESTRICT FKs to the
+    untouched modalities table.
+    """
+    conn = op.get_bind()
+    for src, rows in snapshot.items():
+        if not rows:
+            continue
+        conn.execute(
+            sa.text(
+                f"INSERT INTO {src} (ai_model_id, modality_id, position)"
+                " VALUES (:aid, :mid, :pos)"
+            ),
+            [
+                {"aid": aid, "mid": mid, "pos": pos}
+                for aid, mid, pos in rows
+            ],
+        )
+
+
 def upgrade():
+    _snapshot = _snapshot_associations()
     with op.batch_alter_table("ai_models", schema=None) as batch_op:
         batch_op.alter_column("price_in", existing_type=sa.Float(), nullable=True)
         batch_op.alter_column("context_tokens", existing_type=sa.Integer(), nullable=True)
@@ -58,6 +106,7 @@ def upgrade():
             " AND context_tokens > 0)"
             " OR (context_type = 'image' AND context_tokens IS NULL)",
         )
+    _restore_associations(_snapshot)
 
 
 def downgrade():
@@ -85,6 +134,7 @@ def downgrade():
             % int(bad)
         )
 
+    _snapshot = _snapshot_associations()
     with op.batch_alter_table("ai_models", schema=None) as batch_op:
         batch_op.drop_constraint("ck_ai_models_context_tokens_valid", type_="check")
         batch_op.drop_constraint("ck_ai_models_pricing_unit_valid", type_="check")
@@ -100,3 +150,4 @@ def downgrade():
         batch_op.create_check_constraint(
             "ck_ai_models_context_tokens_positive", "context_tokens > 0"
         )
+    _restore_associations(_snapshot)
