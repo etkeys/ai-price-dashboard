@@ -40,9 +40,11 @@ def create_app(config_name: str = "default") -> Flask:
     register_commands(app)
 
     # Register Jinja template helpers.
-    from app.utils.helpers import format_context, format_price
+    from app.utils.helpers import format_context, format_price, render_price
 
-    app.jinja_env.globals.update(format_context=format_context, format_price=format_price)
+    app.jinja_env.globals.update(
+        format_context=format_context, format_price=format_price, render_price=render_price
+    )
 
     # Register blueprints.
     from app.auth import auth_bp

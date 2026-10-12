@@ -46,6 +46,70 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-039 — Must new context/pricing fields preserve legacy request bodies?
+- Status: **CONFIRMED**
+- Date raised: 2026-08-26   Date ruled: 2026-08-26
+- Source: `_research/2608260643_output_only_pricing_context_type_decisions.md` §4
+- Card: t_c2ba9f5b (blocks t_0500161d; root t_9862f5da)
+- Question: should existing create clients that omit the new type/unit fields
+  continue to create token-context, per-million-token models, and what atomic
+  PATCH contract governs token↔image transitions?
+- Options: (a) default omitted create fields to legacy token semantics and
+  require `context_type` + `context_tokens` together on transitions; (b) require
+  every new field immediately; (c) infer semantics from nulls/modalities.
+- Chip recommends: **(a)**. Existing request bodies have one lossless
+  interpretation; inference from image modalities is false for multimodal LLMs.
+- Ruling: **(a)**. Default omitted create fields to the legacy token semantics,
+  and require `context_type` + `context_tokens` together when PATCH changes
+  context type. Erik: *"I agree with recommendations. Go with 1A, 2B, and 3A."*
+- Rationale: Erik accepted Chip's recommendation without additional rationale.
+  Existing request bodies have one lossless interpretation, while inference
+  from modalities would misclassify multimodal token-context models.
+- Reversal cost: choosing (b) breaks existing writers immediately; changing
+  defaults or transition rules after external adoption is an API contract break.
+
+### D-038 — Are context type and pricing unit one field or separate fields?
+- Status: **CONFIRMED**
+- Date raised: 2026-08-26   Date ruled: 2026-08-26
+- Source: `_research/2608260643_output_only_pricing_context_type_decisions.md` §3
+- Card: t_c2ba9f5b (blocks t_0500161d; root t_9862f5da)
+- Question: how should the schema represent a model with no numeric token
+  context and output billing per image?
+- Options: (a) one `context_type` (`tokens`/`image`) also drives the price
+  denominator; (b) separate closed `context_type` and `pricing_unit` fields,
+  with nullable `context_tokens`; (c) replace numeric context with free-form text.
+- Chip recommends: **(b)**. Context capability and billing denominator are
+  independent concepts; two CHECK-constrained TEXT columns follow D-001 without
+  introducing lookup tables.
+- Ruling: **(b)**. Add separate closed `context_type` and `pricing_unit` fields,
+  with nullable `context_tokens`. Erik: *"I agree with recommendations. Go with
+  1A, 2B, and 3A."*
+- Rationale: Erik accepted Chip's recommendation without additional rationale.
+  Context capability and billing denominator remain independent concepts; both
+  vocabularies follow D-001's CHECK-constrained TEXT convention.
+- Reversal cost: a migration plus additive API fields now; overloading (a) and
+  splitting it later requires another migration and reinterpretation of stored data.
+
+### D-037 — How is an inapplicable input price represented?
+- Status: **CONFIRMED**
+- Date raised: 2026-08-26   Date ruled: 2026-08-26
+- Source: `_research/2608260643_output_only_pricing_context_type_decisions.md` §2
+- Card: t_c2ba9f5b (blocks t_0500161d; root t_9862f5da)
+- Question: Seedream has a valid `$0.035/image` output price but no applicable
+  input price; how should persistence and JSON distinguish that from free input?
+- Options: (a) nullable `price_in`; (b) retain a numeric price plus an
+  applicability boolean; (c) reserve a numeric sentinel.
+- Chip recommends: **(a)**. SQL/JSON null explicitly means not applicable while
+  numeric zero remains a valid, distinct free-input price.
+- Ruling: **(a)**. Make `price_in` nullable; JSON `null` means not applicable,
+  while numeric zero continues to mean free input. Erik: *"I agree with
+  recommendations. Go with 1A, 2B, and 3A."*
+- Rationale: Erik accepted Chip's recommendation without additional rationale.
+  Null expresses absence of the billing dimension without inventing a sentinel
+  or contradictory applicability/value pair.
+- Reversal cost: a SQLite batch migration, validation/UI changes, and widening
+  `GET /api/v1/models.price_in` from number to number-or-null.
+
 ### D-036 — `AiModel.is_hidden` is broken as a SQL expression; fixed in this card
 - Status: **ASSUMED** (defect fix, not a policy choice)
 - Date raised: 2026-08-10   Date ruled: —

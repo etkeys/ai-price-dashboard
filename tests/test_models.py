@@ -182,3 +182,98 @@ class TestForeignKeys:
                 )
                 == 0
             )
+
+
+class TestContextTypeAndNullPricing:
+    """D-037..D-039: nullable price_in and token/image context semantics."""
+
+    def test_legacy_orm_construction_is_token_based(self, app):
+        """Direct legacy ORM construction defaults to token context / million tokens.
+
+        Ruling 3A: an AiModel built without the new fields behaves exactly like
+        the pre-feature model.
+        """
+        with app.app_context():
+            model = AiModel(
+                name="vendor/model", price_in=1.0, price_out=2.0, context_tokens=100_000
+            )
+            db.session.add(model)
+            db.session.flush()
+            assert model.context_type == "tokens"
+            assert model.pricing_unit == "million_tokens"
+            assert model.context_tokens == 100_000
+
+    def test_nullable_input_price_and_image_context_row(self, app):
+        """An output-only image row persists price_in NULL and image semantics."""
+        with app.app_context():
+            model = AiModel(
+                name="bytedance-seed/seedream-5-0-lite",
+                price_in=None,
+                price_out=0.035,
+                context_type="image",
+                context_tokens=None,
+                pricing_unit="image",
+            )
+            db.session.add(model)
+            db.session.commit()
+
+            fresh = db.session.scalar(select(AiModel).where(AiModel.name == model.name))
+            assert fresh.price_in is None
+            assert fresh.price_out == 0.035
+            assert fresh.context_type == "image"
+            assert fresh.context_tokens is None
+            assert fresh.pricing_unit == "image"
+
+    def test_zero_price_in_is_distinct_from_null(self, app):
+        """Numeric 0 persists as a real free-input price, not NULL."""
+        with app.app_context():
+            free = AiModel(
+                name="vendor/free", price_in=0.0, price_out=2.0, context_tokens=100_000
+            )
+            db.session.add(free)
+            db.session.commit()
+            fresh = db.session.scalar(select(AiModel).where(AiModel.name == free.name))
+            assert fresh.price_in == 0.0
+            assert fresh.price_in is not None
+
+    @pytest.mark.parametrize(
+        ("context_type", "context_tokens"),
+        [
+            ("bogus", 1000),
+            ("tokens", None),
+            ("tokens", 0),
+            ("image", 1000),
+        ],
+    )
+    def test_db_rejects_invalid_context_type_combinations(
+        self, app, context_type, context_tokens
+    ):
+        """The conditional CHECK constraints reject incoherent rows at the DB level."""
+        with app.app_context():
+            model = AiModel(
+                name=f"vendor/{context_type}-{context_tokens}",
+                price_in=1.0,
+                price_out=2.0,
+                context_type=context_type,
+                context_tokens=context_tokens,
+            )
+            db.session.add(model)
+            with pytest.raises(IntegrityError):
+                db.session.commit()
+            db.session.rollback()
+
+    def test_db_rejects_invalid_pricing_unit(self, app):
+        """An unknown pricing_unit violates its CHECK constraint."""
+        with app.app_context():
+            model = AiModel(
+                name="vendor/bad-unit",
+                price_in=1.0,
+                price_out=2.0,
+                context_tokens=100_000,
+                pricing_unit="per-chunk",
+            )
+            db.session.add(model)
+            with pytest.raises(IntegrityError):
+                db.session.commit()
+            db.session.rollback()
+

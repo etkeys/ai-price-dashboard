@@ -23,6 +23,7 @@ from app.models import (
     Modality,
     RecoveryKey,
 )
+from app.models.ai_model import DEFAULT_CONTEXT_TYPE, DEFAULT_PRICING_UNIT
 from app.services.auth_service import (
     ROLE_ADMINISTRATOR,
     ROLE_UPDATER,
@@ -69,7 +70,9 @@ def seed_database(force: bool = False) -> tuple[bool, str]:
                 name=data["name"],
                 price_in=data["price_in"],
                 price_out=data["price_out"],
-                context_tokens=data["context_tokens"],
+                context_tokens=data.get("context_tokens"),
+                context_type=data.get("context_type", DEFAULT_CONTEXT_TYPE),
+                pricing_unit=data.get("pricing_unit", DEFAULT_PRICING_UNIT),
             )
             models_by_name[data["name"]] = model
             db.session.add(model)

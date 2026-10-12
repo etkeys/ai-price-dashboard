@@ -4,12 +4,20 @@ Schema:
     ai_models
         id                INTEGER PK
         name              VARCHAR(128) NOT NULL UNIQUE
-        price_in          FLOAT NOT NULL, CHECK (price_in >= 0)
+        price_in          FLOAT NULL, CHECK (price_in IS NULL OR price_in >= 0)
         price_out         FLOAT NOT NULL, CHECK (price_out >= 0)
-        context_tokens    INTEGER NOT NULL, CHECK (context_tokens > 0)
+        context_type      VARCHAR(16) NOT NULL, CHECK IN ('tokens','image')
+        context_tokens    INTEGER NULL
+        pricing_unit      VARCHAR(16) NOT NULL, CHECK IN ('million_tokens','image')
         created_at        DATETIME NOT NULL, DEFAULT CURRENT_TIMESTAMP
         updated_at        DATETIME NOT NULL, DEFAULT CURRENT_TIMESTAMP
         hidden_at         DATETIME NULL, DEFAULT NULL
+
+    Constraints: price_in NULL means "not applicable" (e.g. output-only image
+    models); numeric 0 remains a valid free-input price. context_type drives
+    context_tokens validity: 'tokens' requires > 0, 'image' requires NULL.
+    pricing_unit (the billing denominator) is independent of context_type.
+    Legacy rows default to context_type='tokens' + pricing_unit='million_tokens'.
 
     modalities
         id                INTEGER PK
@@ -40,6 +48,31 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.extensions import db
+
+
+# Closed vocabularies for model context type and pricing unit (D-037..D-039,
+# ruling 2B per D-001: plain CHECK-constrained TEXT values, not lookup tables).
+class CONTEXT_TYPES:  # noqa: N801 - module-level closed vocabulary
+    """Allowed values for ``AiModel.context_type``."""
+
+    TOKENS = "tokens"
+    IMAGE = "image"
+    ALL = frozenset({TOKENS, IMAGE})
+
+
+class PRICING_UNITS:  # noqa: N801 - module-level closed vocabulary
+    """Allowed values for ``AiModel.pricing_unit``."""
+
+    MILLION_TOKENS = "million_tokens"
+    IMAGE = "image"
+    ALL = frozenset({MILLION_TOKENS, IMAGE})
+
+
+# Legacy (pre-context-type) rows and request bodies unambiguously mean token
+# context billed per one million tokens (ruling 3A). These are the migration
+# backfill and ORM/create defaults.
+DEFAULT_CONTEXT_TYPE = CONTEXT_TYPE_TOKENS = "tokens"
+DEFAULT_PRICING_UNIT = PRICING_UNIT_MILLION_TOKENS = "million_tokens"
 
 
 class Modality(db.Model):
@@ -95,17 +128,29 @@ class AiModel(db.Model):
     name: Mapped[str] = mapped_column(
         String(128), nullable=False, unique=True, index=True
     )
-    price_in: Mapped[float] = mapped_column(
+    price_in: Mapped[float | None] = mapped_column(
         db.Float,
-        nullable=False,
+        nullable=True,
     )
     price_out: Mapped[float] = mapped_column(
         db.Float,
         nullable=False,
     )
-    context_tokens: Mapped[int] = mapped_column(
-        Integer,
+    context_type: Mapped[str] = mapped_column(
+        String(16),
         nullable=False,
+        default=DEFAULT_CONTEXT_TYPE,
+        server_default=DEFAULT_CONTEXT_TYPE,
+    )
+    context_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+    pricing_unit: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=DEFAULT_PRICING_UNIT,
+        server_default=DEFAULT_PRICING_UNIT,
     )
     created_at: Mapped[datetime.datetime] = mapped_column(
         db.DateTime,
@@ -143,9 +188,32 @@ class AiModel(db.Model):
     )
 
     __table_args__ = (
-        CheckConstraint("price_in >= 0", name="ck_ai_models_price_in_non_negative"),
+        # price_in may be NULL ("not applicable", e.g. output-only image models)
+        # or a finite non-negative number; numeric 0 remains a free-input price.
+        CheckConstraint(
+            "(price_in IS NULL) OR (price_in >= 0)",
+            name="ck_ai_models_price_in_non_negative",
+        ),
         CheckConstraint("price_out >= 0", name="ck_ai_models_price_out_non_negative"),
-        CheckConstraint("context_tokens > 0", name="ck_ai_models_context_tokens_positive"),
+        CheckConstraint(
+            "context_type IN ('tokens', 'image')",
+            name="ck_ai_models_context_type_valid",
+        ),
+        CheckConstraint(
+            "pricing_unit IN ('million_tokens', 'image')",
+            name="ck_ai_models_pricing_unit_valid",
+        ),
+        # The context type governs the numeric context: token models require a
+        # positive context, image models require NULL (no token notion). The
+        # constraint is written to yield FALSE (not NULL/UNKNOWN) for an invalid
+        # combination, because SQLite CHECK constraints treat a NULL result as
+        # satisfied — a naive `context_tokens > 0` would let tokens+NULL through.
+        CheckConstraint(
+            "(context_type = 'tokens' AND context_tokens IS NOT NULL"
+            " AND context_tokens > 0)"
+            " OR (context_type = 'image' AND context_tokens IS NULL)",
+            name="ck_ai_models_context_tokens_valid",
+        ),
     )
 
     @property

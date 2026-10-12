@@ -12,6 +12,12 @@ from app.auth.decorators import get_principal
 from app.data.modalities import ALLOWED_MODALITIES as _ALLOWED_MODALITIES
 from app.extensions import db
 from app.models import AiModel, AiModelInputModality, AiModelOutputModality, Modality
+from app.models.ai_model import (
+    CONTEXT_TYPES,
+    DEFAULT_CONTEXT_TYPE,
+    DEFAULT_PRICING_UNIT,
+    PRICING_UNITS,
+)
 from app.models.auth import ROLE_ADMINISTRATOR, ApiKey, AuthEvent, AuthSession
 from app.services.auth_service import (
     _utcnow,
@@ -24,7 +30,23 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 
 ALLOWED_MODALITIES = frozenset(_ALLOWED_MODALITIES)
 
-_EDITABLE_FIELDS = ("price_in", "price_out", "context_tokens", "input_content", "output_content")
+_EDITABLE_FIELDS = (
+    "price_in",
+    "price_out",
+    "context_tokens",
+    "context_type",
+    "pricing_unit",
+    "input_content",
+    "output_content",
+)
+
+_REQUIRED_CREATE_FIELDS = (
+    "price_in",
+    "price_out",
+    "context_tokens",
+    "input_content",
+    "output_content",
+)
 
 
 def _key_status(row: ApiKey) -> str:
@@ -249,46 +271,117 @@ def models_page():
 
 
 def _validate_model_values(
-    data: dict, *, require_all: bool
+    data: dict, *, require_all: bool = False, current: dict | None = None
 ) -> tuple[dict | None, Response | None]:
     """Validate model-field payloads shared by create and partial update.
 
-    Returns ``(values, None)`` on success, where ``values`` only contains keys
-    present in ``data``. Returns ``(None, error_response)`` on validation failure.
+    Returns ``(values, None)`` on success, where ``values`` holds only the keys
+    present in ``data`` (converted and validated). Returns ``(None,
+    error_response)`` on validation failure.
+
+    Semantics (D-037..D-039, rulings 1A/2B/3A):
+      - Key absence differs from explicit ``null``. ``price_in: null`` means
+        "not applicable" and is accepted; numeric ``0`` stays a distinct
+        free-input price.
+      - ``price_out`` must be finite and ``>= 0``; ``null`` is rejected.
+      - ``context_type``/``pricing_unit`` are closed vocabularies matched
+        exactly (no truthiness or implicit coercion).
+      - The *prospective complete row* (submitted values merged over
+        ``current``) must be coherent: ``tokens`` context requires
+        ``context_tokens > 0``; ``image`` requires ``context_tokens`` null.
+      - Changing ``context_type`` requires ``context_tokens`` in the same
+        request (atomic transition pair), because the resulting row is only
+        valid for one coherent combination.
     """
     if require_all:
-        supplied = [f for f in _EDITABLE_FIELDS if data.get(f) not in (None, "")]
-        if len(supplied) != len(_EDITABLE_FIELDS):
+        missing = [f for f in _REQUIRED_CREATE_FIELDS if f not in data]
+        if missing:
             return None, _admin_error(400, "All model attributes are required")
 
     values: dict = {}
     for field in _EDITABLE_FIELDS:
         if field not in data:
             continue
-        if data[field] in (None, ""):
-            return None, _admin_error(400, f"'{field}' is required")
         values[field] = data[field]
 
-    try:
-        if "price_in" in values:
-            values["price_in"] = float(values["price_in"])
-        if "price_out" in values:
+    # --- numeric price / context coercion ---
+    if "price_in" in values:
+        if values["price_in"] is None:
+            values["price_in"] = None  # explicitly "not applicable"
+        else:
+            try:
+                values["price_in"] = float(values["price_in"])
+            except (TypeError, ValueError, OverflowError):
+                return None, _admin_error(
+                    400,
+                    "Prices must be numbers and context_tokens must be an integer",
+                )
+
+    if "price_out" in values:
+        if values["price_out"] is None or values["price_out"] == "":
+            return None, _admin_error(400, "'price_out' is required")
+        try:
             values["price_out"] = float(values["price_out"])
-        if "context_tokens" in values:
-            values["context_tokens"] = int(values["context_tokens"])
-    except (TypeError, ValueError, OverflowError):
-        return None, _admin_error(
-            400, "Prices must be numbers and context_tokens must be an integer"
-        )
+        except (TypeError, ValueError, OverflowError):
+            return None, _admin_error(
+                400, "Prices must be numbers and context_tokens must be an integer"
+            )
+
+    if "context_tokens" in values:
+        if values["context_tokens"] is None or values["context_tokens"] == "":
+            values["context_tokens"] = None  # valid only for image context; checked below
+        else:
+            try:
+                values["context_tokens"] = int(values["context_tokens"])
+            except (TypeError, ValueError, OverflowError):
+                return None, _admin_error(
+                    400, "Prices must be numbers and context_tokens must be an integer"
+                )
 
     if any(
         field in values
+        and values[field] is not None
         and (not math.isfinite(values[field]) or values[field] < 0)
         for field in ("price_in", "price_out")
     ):
         return None, _admin_error(400, "Prices must be finite numbers >= 0")
-    if "context_tokens" in values and values["context_tokens"] <= 0:
-        return None, _admin_error(400, "'context_tokens' must be greater than zero")
+
+    # --- closed vocabularies: exact string match, no coercion ---
+    if "context_type" in values:
+        ct = values["context_type"]
+        if not isinstance(ct, str) or ct not in CONTEXT_TYPES.ALL:
+            return None, _admin_error(400, "'context_type' must be 'tokens' or 'image'")
+        values["context_type"] = ct
+    if "pricing_unit" in values:
+        pu = values["pricing_unit"]
+        if not isinstance(pu, str) or pu not in PRICING_UNITS.ALL:
+            return None, _admin_error(
+                400, "'pricing_unit' must be 'million_tokens' or 'image'"
+            )
+        values["pricing_unit"] = pu
+
+    # --- atomic prospective-row coherence (ruling 3A) ---
+    prospective = dict(current or {})
+    prospective.update(values)
+    result_context_type = prospective.get("context_type", DEFAULT_CONTEXT_TYPE)
+    result_ctx = prospective.get("context_tokens")
+
+    # Changing context_type on PATCH must also carry context_tokens so the
+    # token<->image transition is explicit and atomic.
+    if "context_type" in values and "context_tokens" not in data:
+        return None, _admin_error(
+            400, "Changing 'context_type' requires 'context_tokens' in the same request"
+        )
+
+    if result_context_type == CONTEXT_TYPES.IMAGE:
+        if result_ctx is not None:
+            return None, _admin_error(
+                400, "'context_tokens' must be null for image context"
+            )
+    elif result_ctx is None or result_ctx <= 0:
+        return None, _admin_error(
+            400, "'context_tokens' must be greater than zero for token context"
+        )
 
     for field in ("input_content", "output_content"):
         if field not in values:
@@ -360,6 +453,8 @@ def create_model():
         price_in=content["price_in"],
         price_out=content["price_out"],
         context_tokens=content["context_tokens"],
+        context_type=content.get("context_type", DEFAULT_CONTEXT_TYPE),
+        pricing_unit=content.get("pricing_unit", DEFAULT_PRICING_UNIT),
     )
     db.session.add(model)
 
@@ -414,7 +509,15 @@ def update_model(model_id: int):
     if model is None:
         return _admin_error(404, "Model not found")
 
-    values, error = _validate_model_values(data, require_all=False)
+    values, error = _validate_model_values(
+        data,
+        require_all=False,
+        current={
+            "context_type": model.context_type,
+            "pricing_unit": model.pricing_unit,
+            "context_tokens": model.context_tokens,
+        },
+    )
     if error is not None:
         return error
     assert values is not None  # narrow for type checker
@@ -427,7 +530,13 @@ def update_model(model_id: int):
         assert modality_rows is not None  # narrow for type checker
 
     try:
-        for field in ("price_in", "price_out", "context_tokens"):
+        for field in (
+            "price_in",
+            "price_out",
+            "context_tokens",
+            "context_type",
+            "pricing_unit",
+        ):
             if field in values:
                 setattr(model, field, values[field])
         for field, association in (
