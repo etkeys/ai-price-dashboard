@@ -46,6 +46,56 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-041 — Does the public PATCH require a context pair for an unchanged type?
+- Status: **CONFIRMED**
+- Date raised: 2026-10-12   Date ruled: 2026-10-12
+- Source: `_research/2610121946_public-model-update-api-plan-and-decisions.md` §4
+- Card: t_05923484 (blocks t_67d556a0 and t_e5b77657; root t_808b09aa)
+- Question: D-039 requires `context_type` + `context_tokens` on actual type
+  transitions, but the existing admin validator requires the pair whenever
+  `context_type` is supplied, even unchanged. Which public behavior is intended?
+- Options: (A) require the pair only on actual public type transitions, leaving
+  admin behavior unchanged; (B) mirror admin and always require the pair when
+  the public body supplies `context_type`.
+- Chip recommends: **A**, matching D-039's transition invariant without
+  unnecessarily rejecting unchanged metadata.
+- Ruling (Erik, transcribed from card t_05923484): **A**. Require
+  `context_tokens` only when the public PATCH actually changes `context_type`;
+  an unchanged type alone is valid. Existing admin pairing behavior is unchanged.
+- Rationale (Erik): "Regarding D-041: I agree with option A. Let's require extra
+  information that is not useful if we can avoid it." The selected option is A;
+  the wording is preserved verbatim rather than interpreted as option B.
+- Reversal cost: changes public 200-vs-400 behavior and pinned tests; after
+  client adoption, tightening A to B breaks existing requests.
+
+### D-040 — Strict public numeric JSON types or internal coercive parity?
+- Status: **CONFIRMED**
+- Date raised: 2026-10-12   Date ruled: 2026-10-12
+- Source: `_research/2610121946_public-model-update-api-plan-and-decisions.md` §3
+- Card: t_05923484 (blocks t_67d556a0 and t_e5b77657; root t_808b09aa)
+- Question: the new endpoint requires correct types, but the current admin
+  validator accepts boolean prices and numeric strings, and truncates fractional
+  context values. Should the agent-facing endpoint copy that coercion?
+- Options: (A) strict JSON numeric types on the new public route, preserving
+  existing admin coercion; (B) mirror admin coercion; (C) tighten both surfaces
+  with a wider browser compatibility audit.
+- Chip recommends: **A**. Reject malformed machine data without silently
+  changing the shipped browser-facing contract.
+- Ruling (Erik, transcribed from card t_05923484): **A, with an explicit
+  correction to shipped behavior**. Public prices accept only finite JSON
+  numbers excluding booleans/strings; public `context_tokens` accepts only a
+  JSON integer excluding booleans/floats/strings, or null for image context.
+  Reject boolean-to-number conversion on ALL HTTP model numeric write paths:
+  new public PATCH and existing admin POST/PATCH, for `price_in`, `price_out`,
+  and `context_tokens`. Preserve other existing admin numeric coercions.
+- Rationale (Erik): "This is forcing public interaction to be explicit and the
+  app doesn't just guess." "Coercing `bool` type to a numeric should not be
+  allowed like this. Coering a string that looks like a numeric or a float to
+  an int is one thing, but not a bool to a numeric." Erik explicitly requested
+  that this already-shipped behavior be corrected.
+- Reversal cost: public type acceptance is an API contract and test-shape
+  decision; tightening a permissive contract later rejects adopted requests.
+
 ### D-039 — Must new context/pricing fields preserve legacy request bodies?
 - Status: **CONFIRMED**
 - Date raised: 2026-08-26   Date ruled: 2026-08-26
