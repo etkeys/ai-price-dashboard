@@ -85,6 +85,7 @@ header when called without one.
 |---|---|---|---|
 | GET | `/api/v1/modalities` | None | Modality vocabulary assignable to a model |
 | GET | `/api/v1/models` | None | All models with pricing, context, and modality details |
+| PATCH | `/api/v1/models/<id>` | Updater+ | Update an editable model's pricing, context, or modalities |
 
 The `GET /api/v1/modalities` endpoint is unauthenticated and returns the full
 set of modality names the model write paths accept:
@@ -188,14 +189,112 @@ not a bug: **a hidden model still occupies the unique name index.** List with
 
 Two fields matter for the read→write loop this endpoint exists to enable:
 
-- `id` is the value to send in `PATCH /admin/models/<id>` when you later edit a
-  model.
+- `id` is the value to send in `PATCH /api/v1/models/<id>` (public) or
+  `PATCH /admin/models/<id>` (internal) when you later edit a model.
 - `input_content` / `output_content` come back in persisted `position` order
   and are the exact tokens accepted by the create/update write paths — sending
   them back unchanged will not reorder a model's stored modality sequence.
 
 Responses are cacheable for 60 seconds and CORS-open so agents can poll for
 updated pricing.
+
+### `PATCH /api/v1/models/<id>`
+
+Updater/administrator only. Updates any of the seven editable fields on an
+existing model — `price_in`, `price_out`, `context_tokens`, `context_type`,
+`pricing_unit`, `input_content`, `output_content` — and returns the full
+current public model object (the same shape as one item of `GET
+/api/v1/models`) on success. This is the machine-facing write endpoint an
+automated updater agent uses to sync prices.
+
+```bash
+curl -X PATCH \
+  -H "Authorization: Bearer <updater-or-admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"price_in": 0.1, "price_out": 0.4}' \
+  http://127.0.0.1:5000/api/v1/models/1
+```
+
+```json
+{
+  "id": 1,
+  "name": "anthropic/claude-haiku-4.5",
+  "price_in": 0.1,
+  "price_out": 0.4,
+  "context_type": "tokens",
+  "context_tokens": 200000,
+  "pricing_unit": "million_tokens",
+  "input_content": ["Text", "Images", "Files"],
+  "output_content": ["Text"],
+  "hidden": false,
+  "hidden_at": null,
+  "created_at": "2026-08-10T10:54:19Z",
+  "updated_at": "2026-10-12T20:30:00Z"
+}
+```
+
+Query semantics:
+
+- Omitted keys keep their current values; this is a partial `PATCH`, not a full
+  replacement.
+- `input_content` / `output_content` **replace** that entire side in request
+  order; an omitted side is untouched.
+- Like the internal write path, `context_type` and `pricing_unit` are
+  independent — a token/image context does not force an `image` billing unit,
+  and vice versa.
+- Hidden models are updatable without being unhidden (D-023); the update
+  returns the row's `hidden: true` state and never touches `hidden_at`.
+
+**Public input syntax is stricter than the internal admin forms (D-040).** The
+public endpoint accepts strict JSON numeric types rather than coercing them:
+
+- `price_in` / `price_out` — a finite non-negative JSON number, or `null` for
+  `price_in` (meaning "not applicable"). Booleans and numeric strings
+  (`"1.25"`) are rejected with `400`. `0` is a distinct free-input price and is
+  never treated as `null`.
+- `context_tokens` — a JSON integer, or `null` for image context. Booleans,
+  floats (`3.0`, `3.75`) and strings are rejected with `400`; they are never
+  truncated or coerced.
+
+The internal `PATCH /admin/models/<id>` keeps its more lenient coercion for
+browser compatibility — numeric strings and fractional context still work
+there — **except** that the shared validator now also rejects booleans for
+`price_in`/`price_out`/`context_tokens` on the admin POST and PATCH surfaces
+(D-040 operator correction). The two surfaces therefore differ by design on
+input syntax, and that difference is documented here rather than silently
+diverging in behaviour.
+
+**Context pairing is transition-only (D-041).** `context_tokens` is required in
+the same request only when the submitted `context_type` actually differs from
+the stored value. Sending an unchanged `context_type` alone (`{"context_type":
+"tokens"}` on a token row) succeeds and keeps the existing coherent context
+value. An actual token→image or image→token transition still must carry a
+coherent `context_tokens` (`null` for image, a positive integer for tokens).
+
+Example transition (token → output-only image):
+
+```bash
+curl -X PATCH -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"context_type":"image","context_tokens":null,"pricing_unit":"image","price_in":null,"price_out":0.035}' \
+  http://127.0.0.1:5000/api/v1/models/1
+```
+
+Error codes:
+
+| Status | Case | Error body |
+|---|---|---|
+| 200 | Success | Full updated public model object |
+| 400 | Missing/malformed/empty/non-object JSON | `{"error": "A non-empty JSON object is required"}` |
+| 400 | `name`, `hidden`, `hidden_at`, `is_hidden`, `id`, `created_at`, or `updated_at` in the body | `{"error": "Cannot update field: <key>"}` — no change is made |
+| 400 | Any other unknown field | `{"error": "Unknown model field"}` |
+| 400 | Invalid numeric type, negative/non-finite price, invalid/duplicate/empty/unpersisted modality, or context mismatch | `{"error": "<message>"}` |
+| 401 | Missing/invalid/expired/revoked credentials | `{"error": "Authentication required"}` with `WWW-Authenticate: Bearer` |
+| 403 | Authenticated principal below updater rank | `{"error": "Insufficient role"}` |
+| 404 | Unknown integer model id | `{"error": "Model not found"}` |
+
+All responses carry `Cache-Control: no-store`; the write route sets no CORS
+headers. Authentication runs before body or row inspection, and body shape /
+field checks run before the lookup.
 
 ## Authentication
 
@@ -354,6 +453,15 @@ Any subset of `price_in`, `price_out`, `context_tokens`, `context_type`,
 `pricing_unit`, `input_content`, and `output_content` may be sent; omitted
 fields are left unchanged. `name`, `id`, `created_at`, and `updated_at` are
 immutable and rejected with `400` if present in the body.
+
+The internal surface keeps its lenient numeric coercion for browser
+compatibility — numeric strings (`"1.25"`) still become floats and fractional
+`context_tokens` are truncated — with one operator-ordered correction (D-040):
+booleans are rejected with `400` for `price_in`, `price_out`, and
+`context_tokens` (a `true`/`false` is never coerced to `1`/`0`, on POST or
+PATCH). Note the public `PATCH /api/v1/models/<id>` is stricter and rejects
+numeric strings and fractional context too; see the Public API section for the
+difference and why it is intentional.
 
 PATCH semantics for the new fields (D-037..D-039):
 
