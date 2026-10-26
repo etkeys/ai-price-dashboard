@@ -46,6 +46,51 @@ Never edit a `CONFIRMED` entry in place. Add a new entry and mark the old one
 
 # Log
 
+### D-044 — Python upgrade cleanup preserves application behavior
+- Status: **ASSUMED**
+- Date raised: 2026-10-26   Date ruled: —
+- Source: `_research/2610260024_python-314-upgrade-plan.md` §§2,5,§A item 3
+- Card: t_1342914f (implementation t_5e830a56; review t_b9eabfa4)
+- Assumption in force: correct the invalid `\S8` docstring escape in
+  `app/models/auth.py:3` and diagnose/close fixture-owned SQLite connections
+  exposed by Python 3.13+ ResourceWarnings. Preserve production engine lifetime,
+  transaction policy, schema, roles, API contracts, and intended test behavior.
+  Do not suppress warnings globally to claim compatibility. If diagnosis requires
+  a production behavior change, escalate rather than widening this assumption.
+- Reversal cost: small docstring/fixture changes and rerunning warning diagnostics;
+  production policy changes require a separately ruled scope.
+
+### D-043 — Python 3.14 uses conservative tested dependency floors
+- Status: **ASSUMED**
+- Date raised: 2026-10-26   Date ruled: —
+- Source: `_research/2610260024_python-314-upgrade-plan.md` §3, §A item 2
+- Card: t_1342914f (implementation t_5e830a56; review t_b9eabfa4)
+- Assumption in force: in both production dependency declarations use floors
+  Flask>=3.1.3, Flask-SQLAlchemy>=3.1.1, Flask-Migrate>=4.1.0,
+  python-dotenv>=1.2.2, gunicorn>=26.0.0, and explicitly declare the directly
+  imported SQLAlchemy>=2.0.51. Dev floors: pytest>=9.1.1 and pytest-cov>=7.1.0.
+  These are conservative tested versions, not first-compatible-release claims.
+  Retain the existing minimum-version policy; no new lockfile system or
+  speculative SQLAlchemy<2.1 cap. Both 2.0.51 and 2.1.6 passed the existing
+  334 tests on local Python 3.14.4; candidate image verification remains required.
+- Reversal cost: manifest edits and dependency/CI revalidation; historical floors
+  require actual Python 3.14 compatibility testing before reinstatement.
+
+### D-042 — Upgrade the container to standard Python 3.14, retain package 3.11 support
+- Status: **ASSUMED**
+- Date raised: 2026-10-26   Date ruled: —
+- Source: `_research/2610260024_python-314-upgrade-plan.md` §§1-2, §A item 1
+- Card: t_1342914f (root t_854093f4; implementation t_5e830a56; review t_b9eabfa4)
+- Assumption in force: operator-selected Python 3.14 is deployed using ordinary
+  GIL-enabled `python:3.14-slim-trixie`. Keep `requires-python = ">=3.11"`
+  and test 3.11/3.14 in CI; do not adopt 3.14-only source syntax or replace the
+  host interpreter/Hermes runtime. Preserve appuser UID/GID 1000, SQLite volume,
+  migrations/seed/bootstrap startup order, health probe, and sync Gunicorn workers.
+  Use explicit Debian suite and fresh pulls; record actual image digest/versions.
+  D-000's canonical `.venv/` remains unchanged by research.
+- Reversal cost: Docker/CI/docs edits and full image/persistence revalidation;
+  raising the package minimum later separately drops older interpreter support.
+
 ### D-041 — Does the public PATCH require a context pair for an unchanged type?
 - Status: **CONFIRMED**
 - Date raised: 2026-10-12   Date ruled: 2026-10-12

@@ -4,10 +4,14 @@ A Flask application for tracking and displaying AI-related prices.
 
 ## Quick Start
 
-1. Create and activate the project's virtual environment (`.venv/` is the canonical environment; recreate it with `python3.11 -m venv .venv` if it is missing):
+1. Create and activate the project's virtual environment (`.venv/` is the canonical environment; recreate it with `python3.14 -m venv .venv` if it is missing):
    ```bash
    source .venv/bin/activate
    ```
+   Python 3.14 matches the container image and is the recommended development
+   interpreter. Python 3.11 remains supported and is exercised in CI. A virtual
+   environment is bound to the interpreter that created it, so switching
+   versions means recreating `.venv`, never upgrading it in place.
 
 2. Install dependencies:
    ```bash

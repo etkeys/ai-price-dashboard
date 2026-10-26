@@ -16,6 +16,10 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.14']
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -23,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Install dependencies
@@ -73,9 +77,9 @@ jobs:
       - name: Build docker image
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
-            docker build -t "${{ steps.meta.outputs.tag_version }}" -t "${{ steps.meta.outputs.tag_latest }}" .
+            docker build --pull -t "${{ steps.meta.outputs.tag_version }}" -t "${{ steps.meta.outputs.tag_latest }}" .
           else
-            docker build -t "${{ steps.meta.outputs.tag_version }}" .
+            docker build --pull -t "${{ steps.meta.outputs.tag_version }}" .
           fi
 
       - name: Log in to private registry

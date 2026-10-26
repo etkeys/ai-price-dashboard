@@ -17,6 +17,9 @@ def app():
         yield app
         db.session.remove()
         db.drop_all()
+        # Python 3.13+ reports connections left to the GC as ResourceWarnings.
+        # Dispose the fixture-owned engine pool while the app context is valid.
+        db.engine.dispose()
 
 
 @pytest.fixture
