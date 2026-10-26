@@ -40,6 +40,10 @@ def migrated_app(tmp_path):
     with app.app_context():
         command.upgrade(_alembic_config(), PREV_REV)
     yield app
+    # Alembic drives the app's engine, so close the fixture-owned pool here too.
+    with app.app_context():
+        db.session.remove()
+        db.engine.dispose()
 
 
 def _upgrade_head(app):

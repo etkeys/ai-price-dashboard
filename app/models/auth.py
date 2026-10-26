@@ -1,6 +1,6 @@
 """Authentication and authorization ORM models.
 
-Schema (see \S8 of _research/2607301109_api-key-auth-design.md):
+Schema (see §8 of _research/2607301109_api-key-auth-design.md):
 
     api_keys
         id                  INTEGER PK autoincrement

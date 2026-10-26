@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM python:3.11-slim
+FROM python:3.14-slim-trixie
 
 # Prevent Python from writing bytecode and buffer stdout/stderr for clean logs.
 ENV PYTHONDONTWRITEBYTECODE=1 \
